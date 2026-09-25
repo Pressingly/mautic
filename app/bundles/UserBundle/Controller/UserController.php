@@ -8,6 +8,7 @@ use JMS\Serializer\SerializerInterface;
 use Mautic\CoreBundle\Controller\FormController;
 use Mautic\CoreBundle\Entity\AuditLogRepository;
 use Mautic\CoreBundle\Factory\PageHelperFactoryInterface;
+use Mautic\CoreBundle\Helper\EncryptionHelper;
 use Mautic\CoreBundle\Helper\InputHelper;
 use Mautic\CoreBundle\Helper\IpLookupHelper;
 use Mautic\CoreBundle\Helper\LanguageHelper;
@@ -22,6 +23,7 @@ use Mautic\UserBundle\Form\Type\UserInviteType;
 use Mautic\UserBundle\Helper\UserSearchScopeProvider;
 use Mautic\UserBundle\Model\RoleModel;
 use Mautic\UserBundle\Model\UserModel;
+use Mautic\UserBundle\Security\Mpass\ProxyIdentity;
 use Mautic\UserBundle\Security\SAML\Helper as SAMLHelper;
 use Symfony\Component\Form\FormInterface;
 use Symfony\Component\HttpFoundation\JsonResponse;
@@ -203,7 +205,7 @@ final class UserController extends FormController
         ]);
     }
 
-    public function newAction(Request $request, LanguageHelper $languageHelper, SAMLHelper $samlHelper): JsonResponse|Response
+    public function newAction(Request $request, LanguageHelper $languageHelper, SAMLHelper $samlHelper, ProxyIdentity $mpass): JsonResponse|Response
     {
         if (!$this->security->isGranted('user:users:create')) {
             $this->throwAccessDenied();
@@ -217,22 +219,30 @@ final class UserController extends FormController
         $form     = $this->userModel->createForm($user, $this->formFactory, $action);
         $response = null;
 
-        // Check for a submitted form and process it
-        if ('POST' === $request->getMethod()) {
-            $response = $this->handleNewUserPost($request, $languageHelper, $samlHelper, $user, $form);
+        // Under mPass SSO an admin may pre-provision a user by email and role, but never sets a
+        // password: the submitted one is refused and a random one is set (identity-surface-gating).
+        $sso = $mpass->isSso();
+        if ($sso) {
+            $form->remove('plainPassword');
+            $user->setPlainPassword(EncryptionHelper::generateKey()); // satisfies the create-time NotBlank
         }
 
-        return $response ?? $this->renderNewUserForm($form, $action);
+        // Check for a submitted form and process it
+        if ('POST' === $request->getMethod()) {
+            $response = $this->handleNewUserPost($request, $languageHelper, $samlHelper, $mpass, $user, $form);
+        }
+
+        return $response ?? $this->renderNewUserForm($form, $action, $sso);
     }
 
-    private function handleNewUserPost(Request $request, LanguageHelper $languageHelper, SAMLHelper $samlHelper, User $user, FormInterface $form): JsonResponse|Response|null
+    private function handleNewUserPost(Request $request, LanguageHelper $languageHelper, SAMLHelper $samlHelper, ProxyIdentity $mpass, User $user, FormInterface $form): JsonResponse|Response|null
     {
         $response  = null;
         $cancelled = $this->isFormCancelled($form);
         $valid     = false;
 
         if (!$cancelled) {
-            $valid = $this->saveNewUserIfValid($request, $languageHelper, $user, $form);
+            $valid = $this->saveNewUserIfValid($request, $languageHelper, $user, $form, $mpass->isSso());
         }
 
         if ($cancelled || ($valid && $this->getFormButton($form, ['buttons', 'save'])->isClicked())) {
@@ -246,16 +256,16 @@ final class UserController extends FormController
                 ],
             ]);
         } elseif ($valid) {
-            $response = $this->editAction($request, $languageHelper, $samlHelper, $user->getId(), true);
+            $response = $this->editAction($request, $languageHelper, $samlHelper, $mpass, $user->getId(), true);
         }
 
         return $response;
     }
 
-    private function saveNewUserIfValid(Request $request, LanguageHelper $languageHelper, User $user, FormInterface $form): bool
+    private function saveNewUserIfValid(Request $request, LanguageHelper $languageHelper, User $user, FormInterface $form, bool $sso): bool
     {
         $formUser          = $request->request->all()['user'] ?? [];
-        $submittedPassword = $formUser['plainPassword']['password'] ?? null;
+        $submittedPassword = $sso ? $user->getPlainPassword() : ($formUser['plainPassword']['password'] ?? null);
         $password          = $this->userModel->checkNewPassword($user, $submittedPassword);
         $valid             = $this->isFormValid($form);
 
@@ -295,10 +305,10 @@ final class UserController extends FormController
         }
     }
 
-    private function renderNewUserForm(FormInterface $form, string $action): JsonResponse|Response
+    private function renderNewUserForm(FormInterface $form, string $action, bool $sso): JsonResponse|Response
     {
         return $this->delegateView([
-            'viewParameters'  => ['form' => $form->createView(), 'isSamlUser' => false],
+            'viewParameters'  => ['form' => $form->createView(), 'isSamlUser' => $sso],
             'contentTemplate' => '@MauticUser/User/form.html.twig',
             'passthroughVars' => [
                 'activeLink'    => '#mautic_user_new',
@@ -314,7 +324,7 @@ final class UserController extends FormController
      * @param int  $objectId
      * @param bool $ignorePost
      */
-    public function editAction(Request $request, LanguageHelper $languageHelper, SAMLHelper $samlHelper, $objectId, $ignorePost = false): Response
+    public function editAction(Request $request, LanguageHelper $languageHelper, SAMLHelper $samlHelper, ProxyIdentity $mpass, $objectId, $ignorePost = false): Response
     {
         if (!$this->security->isGranted('user:users:edit')) {
             $this->throwAccessDenied();
@@ -363,9 +373,17 @@ final class UserController extends FormController
         $action = $this->generateUrl('mautic_user_action', ['objectAction' => 'edit', 'objectId' => $objectId]);
         $form   = $this->userModel->createForm($user, $this->formFactory, $action);
 
-        $isSamlUser    = $samlHelper->isSamlSession();
+        // Under mPass SSO the password and email are owned by the identity provider: the password
+        // field is removed and the email field disabled (Symfony ignores submitted data for disabled
+        // fields) before the POST is processed (identity-surface-gating).
+        $sso        = $mpass->isSso();
+        $isSamlUser = $sso || $samlHelper->isSamlSession();
         if ($isSamlUser) {
             $form->remove('plainPassword');
+        }
+        if ($sso) {
+            $email = $form->get('email')->getConfig();
+            $form->add('email', $email->getType()->getInnerType()::class, ['disabled' => true] + $email->getOptions());
         }
 
         // /Check for a submitted form and process it
@@ -375,9 +393,9 @@ final class UserController extends FormController
             if (!$cancelled = $this->isFormCancelled($form)) {
                 // check to see if the password needs to be rehashed
                 $formUser          = $request->request->all()['user'] ?? [];
-                $submittedPassword = $formUser['plainPassword']['password'] ?? null;
+                $submittedPassword = $sso ? null : ($formUser['plainPassword']['password'] ?? null);
                 $password          = $this->userModel->checkNewPassword($user, $submittedPassword);
-                $newEmail          = $formUser['email'] ?? null;
+                $newEmail          = $sso ? $oldEmail : ($formUser['email'] ?? null);
 
                 if ($valid = $this->isFormValid($form)) {
                     // form is valid so process the data

@@ -22,7 +22,7 @@
             </a>
         </li>
 
-        {% if securityIsGranted('user:users:create') %}
+        {% if securityIsGranted('user:users:create') and not mpassSsoEnabled() %}
         <li>
             <a href="{{ path('mautic_user_index', {'open': 'invite'}) }}" data-toggle="ajax">
                 <i class="ri-team-line"></i>
@@ -32,7 +32,8 @@
         {% endif %}
 
         <li>
-            <a href="{{ path('mautic_user_logout') }}">
+            {# Under mPass SSO, Logout is navigation-only to the portal (logout-flow); it clears nothing. #}
+            <a href="{{ mpassSsoEnabled() and mpassPortalUrl() ? mpassPortalUrl() : path('mautic_user_logout') }}">
                 <i class="ri-logout-circle-r-line ri-lg"></i><span>{% trans %}mautic.user.auth.logout{% endtrans %}</span>
             </a>
         </li>

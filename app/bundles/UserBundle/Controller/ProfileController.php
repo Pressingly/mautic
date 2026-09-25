@@ -8,6 +8,7 @@ use Mautic\CoreBundle\Controller\FormController;
 use Mautic\CoreBundle\Helper\LanguageHelper;
 use Mautic\UserBundle\Entity\User;
 use Mautic\UserBundle\Model\UserModel;
+use Mautic\UserBundle\Security\Mpass\ProxyIdentity;
 use Mautic\UserBundle\Security\SAML\Helper as SAMLHelper;
 use Symfony\Component\Form\Extension\Core\Type\TextType;
 use Symfony\Component\HttpFoundation\RedirectResponse;
@@ -31,11 +32,15 @@ final class ProfileController extends FormController
      * Generate's account profile.
      */
     public function indexAction(Request $request, LanguageHelper $languageHelper,
-        TokenStorageInterface $tokenStorage, SAMLHelper $samlHelper): Response|RedirectResponse
+        TokenStorageInterface $tokenStorage, SAMLHelper $samlHelper, ProxyIdentity $mpass): Response|RedirectResponse
     {
         // get current user
         $me = $tokenStorage->getToken()->getUser();
         \assert($me instanceof User);
+
+        // Under mPass SSO the password and email are owned by the identity provider. Both are
+        // refused server-side here, before the POST is processed (identity-surface-gating).
+        $sso = $mpass->isSso();
 
         // set some permissions
         $permissions = [
@@ -45,11 +50,14 @@ final class ProfileController extends FormController
             'editName'     => $this->security->isGranted('user:profile:editname'),
             'editUsername' => $this->security->isGranted('user:profile:editusername'),
             'editPosition' => $this->security->isGranted('user:profile:editposition'),
-            'editEmail'    => $this->security->isGranted('user:profile:editemail'),
+            'editEmail'    => !$sso && $this->security->isGranted('user:profile:editemail'),
         ];
 
         $action = $this->generateUrl('mautic_user_account');
         $form   = $this->userModel->createForm($me, $this->formFactory, $action, ['in_profile' => true]);
+        if ($sso) {
+            $form->remove('plainPassword');
+        }
 
         $overrides = [];
 
@@ -158,7 +166,7 @@ final class ProfileController extends FormController
 
             // check to see if the password needs to be rehashed
             $formUser              = $request->request->all()['user'] ?? [];
-            $submittedPassword     = $formUser['plainPassword']['password'] ?? null;
+            $submittedPassword     = $sso ? null : ($formUser['plainPassword']['password'] ?? null);
             $overrides['password'] = $this->userModel->checkNewPassword($me, $submittedPassword);
             if (!$cancelled = $this->isFormCancelled($form)) {
                 if ($this->isFormValid($form)) {
@@ -232,8 +240,8 @@ final class ProfileController extends FormController
         }
         $request->getSession()->set('formProcessed', 0);
 
-        $isSamlUser    = $samlHelper->isSamlSession();
-        if ($isSamlUser) {
+        $isSamlUser    = $sso || $samlHelper->isSamlSession();
+        if ($isSamlUser && $form->has('plainPassword') && !$form->isSubmitted()) {
             $form->remove('plainPassword');
         }
 
