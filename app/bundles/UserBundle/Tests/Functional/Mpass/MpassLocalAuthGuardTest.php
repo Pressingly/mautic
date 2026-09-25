@@ -1,0 +1,301 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Mautic\UserBundle\Tests\Functional\Mpass;
+
+use Mautic\UserBundle\Entity\User;
+use Mautic\UserBundle\EventListener\MpassLocalAuthGuard;
+use Symfony\Component\BrowserKit\Cookie;
+use Symfony\Component\HttpFoundation\Request;
+use Symfony\Component\HttpFoundation\Response;
+use Symfony\Component\Routing\RouterInterface;
+
+/**
+ * identity-surface-gating, logout-flow and the Mautic-specific gaps G1, G3, G5, G11, G14
+ * (sso-rules-moneta apps/mautic/security.md).
+ */
+final class MpassLocalAuthGuardTest extends AbstractMpassTestCase
+{
+    /** Every local-credential endpoint, called directly (task 3.12 / 5.16). */
+    private const GATED_REQUESTS = [
+        ['POST', '/s/login_check'],
+        ['GET', '/passwordreset'],
+        ['POST', '/passwordreset'],
+        ['GET', '/passwordresetconfirm'],
+        ['POST', '/passwordresetconfirm'],
+        ['GET', '/invite/some-token'],
+        ['POST', '/invite/some-token'],
+        ['GET', '/s/saml/login'],
+        ['POST', '/s/saml/login_check'],
+        ['GET', '/saml/discovery'],
+        ['GET', '/saml/metadata.xml'],
+        ['GET', '/saml/login_retry'],
+        ['GET', '/s/sso_login/Foo'],
+        ['GET', '/s/sso_login_check/Foo'],
+        ['GET', '/oauth/v2/authorize'],
+        ['GET', '/oauth/v2/authorize_login'],
+        ['POST', '/oauth/v2/authorize_login_check'],
+        ['POST', '/s/users/invite'],
+        ['POST', '/api/users/new'],
+    ];
+
+    /**
+     * Routes whose controller sets a credential or which the firewall handles, and which stay
+     * reachable under SSO for a stated reason (task 5.17).
+     */
+    private const ALLOWED = [
+        'login'               => 'guard: redirects to the dashboard or renders the static mPass page',
+        'mautic_user_logout'  => 'guard: 302 to MPASS_PORTAL_URL, clears nothing',
+        'mautic_user_account' => 'ProfileController drops plainPassword and email under SSO',
+        'mautic_user_action'  => 'new/edit drop plainPassword (and email on edit) under SSO; invite is gated',
+        'mautic_user_index'   => 'list only; the invite button is hidden under SSO',
+    ];
+
+    public function testLocalCredentialEndpoints404UnderSso(): void
+    {
+        $admin    = $this->findUser('admin@yoursite.com');
+        $password = $admin->getPassword();
+        $count    = $this->userCount();
+
+        foreach (self::GATED_REQUESTS as [$method, $path]) {
+            $response = $this->get($path, null, [], $method);
+            self::assertSame(Response::HTTP_NOT_FOUND, $response->getStatusCode(), "{$method} {$path}");
+            self::assertFalse($response->headers->has('Set-Cookie') && str_contains((string) $response->headers->get('Set-Cookie'), 'REMEMBERME='), "{$method} {$path} issued no credential");
+        }
+
+        self::assertSame($password, $this->reload($admin)->getPassword(), 'no password changed');
+        self::assertSame($count, $this->userCount(), 'no user created');
+    }
+
+    public function testIndexPhpPrefixIsGated(): void
+    {
+        $server = ['SCRIPT_NAME' => '/index.php', 'SCRIPT_FILENAME' => '/app/index.php'];
+        self::assertSame(Response::HTTP_NOT_FOUND, $this->get('/index.php/passwordreset', null, $server)->getStatusCode());
+
+        $this->restartWithEnv('AUTH_TYPE', null);
+        self::assertSame(Response::HTTP_OK, $this->get('/index.php/passwordreset', null, $server)->getStatusCode(), 'the prefixed path does resolve to the route');
+    }
+
+    public function testInertWhenAuthTypeUnset(): void
+    {
+        $this->restartWithEnv('AUTH_TYPE', null);
+
+        self::assertSame(Response::HTTP_OK, $this->get('/passwordreset', null)->getStatusCode());
+        $login = $this->get('/s/login', 'alice@example.com');
+        self::assertSame(Response::HTTP_OK, $login->getStatusCode());
+        self::assertStringContainsString('name="_password"', (string) $login->getContent(), 'the password form is served');
+        self::assertSame(Response::HTTP_FOUND, $this->get('/s/logout', null)->getStatusCode());
+        self::assertStringEndsWith('/s/login', (string) $this->client->getResponse()->headers->get('Location'), 'upstream logout');
+    }
+
+    public function testRouteInventory(): void
+    {
+        $issuers   = '/->(setPassword|checkNewPassword|hashPassword|createInvite|setToken)\(|->loginUser\(/';
+        $unguarded = [];
+
+        foreach (static::getContainer()->get(RouterInterface::class)->getRouteCollection() as $name => $route) {
+            $controller = $route->getDefault('_controller');
+            $class      = is_string($controller) ? explode('::', $controller)[0] : null;
+            $sensitive  = null === $controller && preg_match(MpassLocalAuthGuard::MAIN_FIREWALL_PATH, $route->getPath()) // firewall-handled
+                || (null !== $class && class_exists($class) && preg_match($issuers, (string) file_get_contents((new \ReflectionClass($class))->getFileName())))
+                || (User::class === $route->getDefault('_api_resource_class') && array_intersect($route->getMethods(), ['POST', 'PUT', 'PATCH']));
+
+            if ($sensitive && !MpassLocalAuthGuard::isGatedRoute($name, new Request()) && !isset(self::ALLOWED[$name])) {
+                $unguarded[] = $name.' ('.$route->getPath().')';
+            }
+        }
+
+        self::assertSame([], $unguarded, 'credential-setting or session-issuing routes that are neither gated nor allow-listed');
+    }
+
+    public function testAuthorizationHeaderRefusedOnMainUnderSso(): void
+    {
+        $this->createUser('alice@example.com');
+
+        $response = $this->get('/s/account', 'alice@example.com', ['HTTP_AUTHORIZATION' => 'Bearer x']);
+
+        self::assertSame(Response::HTTP_UNAUTHORIZED, $response->getStatusCode());
+        self::assertNull($this->findUser('alice@example.com')->getLastLogin(), 'no authentication happened');
+    }
+
+    public function testLogoutLinkIsPortalAndLogoutRouteClearsNothing(): void
+    {
+        $this->restartWithEnv('MPASS_PORTAL_URL', 'https://foss.example.test');
+        $this->createUser('alice@example.com');
+        $page = $this->get('/s/account', 'alice@example.com');
+        self::assertStringContainsString('href="https://foss.example.test"', (string) $page->getContent());
+        self::assertStringNotContainsString('/s/logout', (string) $page->getContent());
+        $session = $this->sessionId();
+
+        $response = $this->get('/s/logout', 'alice@example.com');
+
+        self::assertSame(Response::HTTP_FOUND, $response->getStatusCode());
+        self::assertSame('https://foss.example.test', $response->headers->get('Location'));
+        self::assertSame($session, $this->sessionId(), 'the session cookie is unchanged');
+        $this->assertServedAs('alice@example.com', $this->get('/s/account', null));
+    }
+
+    public function testLoginPageNeverLoops(): void
+    {
+        $this->createUser('alice@example.com');
+        $this->createUser('bob@example.com', published: false);
+
+        $toApp = $this->get('/s/login', 'alice@example.com');
+        self::assertSame(Response::HTTP_FOUND, $toApp->getStatusCode());
+        self::assertStringEndsWith('/s/dashboard', (string) $toApp->headers->get('Location'));
+
+        $landing = $this->get('/s/login', null);
+        self::assertSame(Response::HTTP_OK, $landing->getStatusCode());
+        self::assertStringContainsString('data-reason="signin"', (string) $landing->getContent());
+        self::assertStringNotContainsString('_password', (string) $landing->getContent());
+
+        $this->client->getCookieJar()->clear();
+        $this->get('/s/login', 'bob@example.com');
+        $refused = $this->get((string) $this->client->getResponse()->headers->get('Location'), 'bob@example.com');
+        $this->assertRefused('inactive', $refused);
+    }
+
+    public function testRememberMeDoesNotResurrectPreviousUser(): void
+    {
+        // Mint a genuine REMEMBERME for admin through the password login, SSO off.
+        $this->restartWithEnv('AUTH_TYPE', null);
+        $crawler = $this->client->request('GET', '/s/login');
+        $form    = $crawler->filter('form')->form(['_username' => 'admin', '_password' => 'Maut1cR0cks!', '_remember_me' => true]);
+        $this->client->submit($form);
+        $rememberMe = $this->client->getCookieJar()->get('REMEMBERME');
+        self::assertNotNull($rememberMe, 'precondition: a remember-me cookie was issued');
+
+        // Control: with SSO off the cookie alone restores admin.
+        $this->client->getCookieJar()->clear();
+        $this->client->getCookieJar()->set(new Cookie('REMEMBERME', $rememberMe->getValue()));
+        $this->assertServedAs('admin', $this->get('/s/account', null));
+
+        // Under SSO, A's cookie with B's header is served as B, and the cookie is expired.
+        $this->restartWithEnv('AUTH_TYPE', 'SSO');
+        $this->createUser('bob@example.com');
+        $this->client->getCookieJar()->clear();
+        $this->client->getCookieJar()->set(new Cookie('REMEMBERME', $rememberMe->getValue()));
+        $response = $this->get('/s/account', 'bob@example.com');
+        $this->assertServedAs('bob@example.com', $response);
+        self::assertStringContainsString('REMEMBERME=deleted', implode("\n", $response->headers->all('set-cookie')));
+
+        // And A's cookie with no header and no session is not honoured at all.
+        $this->client->getCookieJar()->clear();
+        $this->client->getCookieJar()->set(new Cookie('REMEMBERME', $rememberMe->getValue()));
+        $response = $this->get('/s/account', null);
+        $this->assertAnonymous($response);
+        self::assertStringContainsString('REMEMBERME=deleted', implode("\n", $response->headers->all('set-cookie')));
+    }
+
+    public function testRefusalsDoNotConsumeLoginThrottling(): void
+    {
+        for ($i = 0; $i < 20; ++$i) {
+            $this->client->getCookieJar()->clear();
+            $this->assertRefused('unresolvable', $this->get('/s/account', '1020010000019120'));
+        }
+
+        $this->client->getCookieJar()->clear();
+        $this->createUser('alice@example.com');
+        $this->assertServedAs('alice@example.com', $this->get('/s/account', 'alice@example.com'));
+    }
+
+    public function testBypassedPathWithLiveSessionIsAnonymous(): void
+    {
+        $alice = $this->createUser('alice@example.com');
+        $this->loginUser($alice);
+        $this->assertServedAs('alice@example.com', $this->get('/s/account', null));
+
+        // PageModel skips hits for logged-in users ("don't skew results with user hits").
+        $this->assertHitsRecorded(1, 'the session is not honoured on the public firewall');
+
+        $this->restartWithEnv('AUTH_TYPE', null);
+        $this->assertHitsRecorded(0, 'upstream behaviour without SSO');
+    }
+
+    public function testProfileAndAdminEditCannotChangePasswordOrEmail(): void
+    {
+        $alice = $this->createUser('alice@example.com');
+        $bob   = $this->createUser('bob@example.com');
+        $this->get('/s/account', 'alice@example.com');
+
+        $this->submitWithExtras('/s/account', ['plainPassword' => ['password' => 'N3w-Passw0rd!', 'confirm' => 'N3w-Passw0rd!'], 'email' => 'evil@example.com']);
+        $this->submitWithExtras('/s/users/edit/'.$bob->getId(), ['plainPassword' => ['password' => 'N3w-Passw0rd!', 'confirm' => 'N3w-Passw0rd!'], 'email' => 'evil2@example.com']);
+
+        foreach ([$alice, $bob] as $user) {
+            $fresh = $this->reload($user);
+            self::assertSame('unused', $fresh->getPassword(), $user->getEmail().' password unchanged');
+            self::assertSame($user->getEmail(), $fresh->getEmail(), $user->getEmail().' email unchanged');
+        }
+    }
+
+    public function testProfileSaveStillWorksUnderSso(): void
+    {
+        $alice = $this->createUser('alice@example.com');
+        $this->get('/s/account', 'alice@example.com');
+
+        $this->submitWithExtras('/s/account', ['firstName' => 'Alicia']);
+
+        self::assertSame('Alicia', $this->reload($alice)->getFirstName());
+    }
+
+    public function testAdminCreateIgnoresSubmittedPassword(): void
+    {
+        $this->createUser('alice@example.com');
+        $this->get('/s/account', 'alice@example.com');
+
+        $carol = [
+            'username'  => 'carol@example.com',
+            'email'     => 'carol@example.com',
+            'firstName' => 'Carol',
+            'lastName'  => 'Example',
+            'role'      => (string) $this->memberRole->getId(),
+        ];
+        $known  = ['password' => 'Kn0wn-Passw0rd!', 'confirm' => 'Kn0wn-Passw0rd!'];
+        $hasher = static::getContainer()->get('security.user_password_hasher');
+
+        // A direct POST carrying a password: the field does not exist under SSO, so it never lands.
+        $this->submitWithExtras('/s/users/new', $carol + ['plainPassword' => $known]);
+        $created = $this->findUser('carol@example.com');
+        self::assertTrue(null === $created || !$hasher->isPasswordValid($created, $known['password']), 'the submitted password was not set');
+
+        // The UI's own submit (no password field) pre-provisions the user with a random password.
+        $this->restart();
+        $this->submitWithExtras('/s/users/new', $carol);
+        $created = $this->findUser('carol@example.com');
+        self::assertNotNull($created, 'pre-provisioning by email still works');
+        self::assertNotEmpty($created->getPassword());
+        self::assertFalse($hasher->isPasswordValid($created, $known['password']));
+    }
+
+    /**
+     * Submits the `user` form found at $path with extra/overridden fields, including fields the
+     * rendered form does not have (a direct POST, bypassing the UI).
+     *
+     * @param array<string, mixed> $fields
+     * @param string[]             $dropFromRendered
+     */
+    private function submitWithExtras(string $path, array $fields, array $dropFromRendered = []): void
+    {
+        $crawler = $this->client->request('GET', $path, [], [], ['HTTP_X_AUTH_REQUEST_EMAIL' => 'alice@example.com']);
+        self::assertSame(Response::HTTP_OK, $this->client->getResponse()->getStatusCode(), $path);
+        $values = $crawler->filter('form[name=user]')->form()->getPhpValues();
+        foreach ($dropFromRendered as $name) {
+            unset($values['user'][$name]);
+        }
+        $values['user'] = array_replace($values['user'], $fields);
+        $values['user']['buttons']['save'] = '';
+
+        $this->client->request('POST', $path, $values, [], ['HTTP_X_AUTH_REQUEST_EMAIL' => 'alice@example.com']);
+        self::assertLessThan(500, $this->client->getResponse()->getStatusCode(), "POST {$path} must not crash");
+    }
+
+    private function assertHitsRecorded(int $expected, string $message): void
+    {
+        $table  = MAUTIC_TABLE_PREFIX.'page_hits';
+        $before = (int) $this->connection->fetchOne("SELECT COUNT(*) FROM {$table}");
+        $this->get('/mtracking.gif', null);
+        self::assertSame(Response::HTTP_OK, $this->client->getResponse()->getStatusCode());
+        self::assertSame($expected, (int) $this->connection->fetchOne("SELECT COUNT(*) FROM {$table}") - $before, $message);
+    }
+}
