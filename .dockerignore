@@ -1,0 +1,17 @@
+.git
+.github
+.ddev
+node_modules
+plugins/GrapesJsBuilderBundle/node_modules
+vendor
+var/*
+!var/.gitkeep
+config/local.php
+config/parameters_local.php
+# A dotenv file would silently supply the SSO settings (AUTH_TYPE, MPASS_*); only .env ships.
+.env.local*
+.env.prod*
+.env.test
+*.crt
+*.key
+tests
