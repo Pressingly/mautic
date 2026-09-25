@@ -13,6 +13,35 @@ if (!String.prototype.startsWith) {
 //set default ajax options
 MauticVars.activeRequests = 0;
 
+// mPass SSO (G13b): once the mPass session is gone, ForwardAuth rejects every XHR before it reaches
+// Mautic (401, or a cross-origin redirect that jQuery reports as status 0). Reload the tab so the
+// top-level request goes through ForwardAuth into the mPass login. 403 is Mautic's own permission
+// denial and never triggers a reload. At most one reload per 30 s, so an outage cannot loop.
+MauticVars.mpassShouldReload = function (status, statusText, now, lastReload) {
+    if (!(401 === status || (0 === status && 'abort' !== statusText))) {
+        return false;
+    }
+
+    return now - lastReload >= 30000;
+};
+
+if (typeof mauticMpassSso !== 'undefined' && mauticMpassSso) {
+    mQuery(document).ajaxError(function (event, jqXHR) {
+        var key = 'mauticMpassReloadAt';
+        var now = Date.now();
+        try {
+            var last = parseInt(window.sessionStorage.getItem(key), 10) || 0;
+            if (!MauticVars.mpassShouldReload(jqXHR.status, jqXHR.statusText, now, last)) {
+                return;
+            }
+            window.sessionStorage.setItem(key, String(now));
+        } catch (e) {
+            return; // no sessionStorage, no loop guard: do not reload
+        }
+        window.location.reload();
+    });
+}
+
 mQuery.ajaxSetup({
     beforeSend: function (request, settings) {
         if (settings.showLoadingBar) {
