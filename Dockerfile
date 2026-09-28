@@ -12,10 +12,18 @@
 # and media/files/). The image configures no HTTP auth in Apache, so the server never sets the
 # CGI variable AUTH_TYPE, which would shadow the SSO flag of the same name.
 
-ARG PHP_VERSION=8.2
+# Pinned build inputs; bump deliberately.
+ARG PHP_VERSION=8.2.34
+ARG IPE_VERSION=2.12.0
+ARG COMPOSER_VERSION=2.10.3
+ARG NODE_VERSION=20.20.2
+
+FROM composer:${COMPOSER_VERSION} AS composer
+FROM node:${NODE_VERSION}-bookworm-slim AS node
 
 FROM php:${PHP_VERSION}-apache AS base
-ADD --chmod=0755 https://github.com/mlocati/docker-php-extension-installer/releases/latest/download/install-php-extensions /usr/local/bin/
+ARG IPE_VERSION
+ADD --chmod=0755 https://github.com/mlocati/docker-php-extension-installer/releases/download/${IPE_VERSION}/install-php-extensions /usr/local/bin/
 RUN install-php-extensions intl pdo_mysql mysqli zip gd bcmath imap opcache sockets exif \
     && a2enmod rewrite headers \
     && rm -f /etc/apache2/sites-enabled/000-default.conf \
@@ -24,9 +32,9 @@ COPY docker/mpass/apache-vhost.conf /etc/apache2/sites-enabled/mautic.conf
 WORKDIR /var/www/html
 
 FROM base AS build
-COPY --from=composer:2 /usr/bin/composer /usr/local/bin/composer
-COPY --from=node:20-bookworm-slim /usr/local/bin/node /usr/local/bin/node
-COPY --from=node:20-bookworm-slim /usr/local/lib/node_modules /usr/local/lib/node_modules
+COPY --from=composer /usr/bin/composer /usr/local/bin/composer
+COPY --from=node /usr/local/bin/node /usr/local/bin/node
+COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
 RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
     && apt-get update && apt-get install -y --no-install-recommends git unzip && rm -rf /var/lib/apt/lists/*
@@ -43,7 +51,13 @@ RUN rm -rf node_modules plugins/GrapesJsBuilderBundle/node_modules plugins/Grape
     && ! ls .env.local* .env.prod* 2>/dev/null
 
 FROM base AS runtime
-COPY --from=build --chown=www-data:www-data /var/www/html /var/www/html
+# Code is root-owned and read-only to the web server. Only what Mautic writes at runtime belongs to
+# www-data: config/ (local.php, parameters_local.php), var/ (cache, logs, sessions), media/
+# (uploads, form files, dashboards, regenerated combined JS/CSS), themes/ (theme install/upload)
+# and translations/ (language packs). plugins/ stays read-only: marketplace installs are off.
+COPY --from=build /var/www/html /var/www/html
+RUN mkdir -p config var/cache var/logs var/tmp media/files media/images media/dashboards translations \
+    && chown -R www-data:www-data config var media themes translations
 COPY --chmod=0755 docker/mpass/entrypoint.sh /usr/local/bin/mautic-entrypoint
 ENV APP_ENV=prod APP_DEBUG=0
 HEALTHCHECK --interval=15s --timeout=5s --start-period=120s \
