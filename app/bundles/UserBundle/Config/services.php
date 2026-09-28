@@ -77,6 +77,7 @@ return function (ContainerConfigurator $configurator): void {
             '$sessionFactory'   => service('session.factory'),
             '$rememberMePath'   => '%mautic.rememberme_path%',
             '$rememberMeDomain' => '%mautic.rememberme_domain%',
+            '$logger'           => service('monolog.logger.mautic'),
         ]);
     $services->set(Mautic\UserBundle\Twig\MpassExtension::class)
         ->args([

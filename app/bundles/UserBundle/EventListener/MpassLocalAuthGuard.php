@@ -6,6 +6,7 @@ namespace Mautic\UserBundle\EventListener;
 
 use Mautic\UserBundle\Security\Authenticator\MpassProxyAuthenticator;
 use Mautic\UserBundle\Security\Mpass\ProxyIdentity;
+use Psr\Log\LoggerInterface;
 use Symfony\Component\EventDispatcher\EventSubscriberInterface;
 use Symfony\Component\HttpFoundation\RedirectResponse;
 use Symfony\Component\HttpFoundation\Request;
@@ -73,6 +74,7 @@ final class MpassLocalAuthGuard implements EventSubscriberInterface
         private readonly SessionFactoryInterface $sessionFactory,
         private readonly ?string $rememberMePath = '/',
         private readonly ?string $rememberMeDomain = null,
+        private readonly ?LoggerInterface $logger = null,
     ) {
     }
 
@@ -170,6 +172,31 @@ final class MpassLocalAuthGuard implements EventSubscriberInterface
             return new Response('', Response::HTTP_NOT_FOUND); // G3, G4
         }
 
+        // G11: no bearer/basic credential on the admin UI or the API, in the header or as the
+        // `access_token` parameter FOSOAuthServer also reads. The API is off (api_enabled=false),
+        // but nothing may depend on that alone: an OAuth2/basic login would be a second way in,
+        // and every failed one would count against the login throttle of the whole address.
+        if (preg_match(self::CREDENTIAL_PATH, self::path($request))
+            && ($request->headers->has('Authorization')
+                || $request->query->has('access_token')
+                || $request->request->has('access_token'))) {
+            return new Response('', Response::HTTP_UNAUTHORIZED);
+        }
+
+        // Round-2 review R2-5: every request to the admin UI that came through the protected
+        // router carries the edge secret. One that does not came from inside the network (another
+        // container, Mautic's own outbound HTTP) and is refused outright, instead of being served
+        // as an anonymous or session-authenticated request. Bypass paths are not affected.
+        if (preg_match(self::MAIN_FIREWALL_PATH, self::path($request)) && !$this->identity->fromEdge($request)) {
+            $this->logger?->warning('mPass SSO: admin-UI request without a valid edge secret refused', [
+                'path'                => self::path($request),
+                'client_ip'           => $request->getClientIp(),
+                'secret_header_given' => $request->headers->has(ProxyIdentity::EDGE_SECRET_HEADER), // never the value
+            ]);
+
+            return new Response('', Response::HTTP_FORBIDDEN);
+        }
+
         // G5: per-app Logout is navigation-only; nothing is cleared.
         if ('mautic_user_logout' === $route) {
             return $this->portalUrl
@@ -182,17 +209,6 @@ final class MpassLocalAuthGuard implements EventSubscriberInterface
             return '' !== $this->identity->asserted($request)
                 ? new RedirectResponse($this->urlGenerator->generate('mautic_dashboard_index'))
                 : $this->mpassPage('signin');
-        }
-
-        // G11: no bearer/basic credential on the admin UI or the API, in the header or as the
-        // `access_token` parameter FOSOAuthServer also reads. The API is off (api_enabled=false),
-        // but nothing may depend on that alone: an OAuth2/basic login would be a second way in,
-        // and every failed one would count against the login throttle of the whole address.
-        if (preg_match(self::CREDENTIAL_PATH, self::path($request))
-            && ($request->headers->has('Authorization')
-                || $request->query->has('access_token')
-                || $request->request->has('access_token'))) {
-            return new Response('', Response::HTTP_UNAUTHORIZED);
         }
 
         return null;

@@ -41,7 +41,7 @@ final class MpassEdgeSecretTest extends AbstractMpassTestCase
             $this->assertServedAs('alice@example.com', $this->get('/s/account', 'alice@example.com'));
 
             $this->client->getCookieJar()->clear();
-            $this->assertAnonymous($this->get('/s/account', 'alice@example.com', ['HTTP_X_MPASS_EDGE_SECRET' => 'wrong']));
+            self::assertSame(403, $this->get('/s/account', 'alice@example.com', ['HTTP_X_MPASS_EDGE_SECRET' => 'wrong'])->getStatusCode());
         } finally {
             unlink($file);
         }

@@ -87,8 +87,10 @@ abstract class AbstractMpassTestCase extends MauticMysqlTestCase
     {
         if (null !== $email) {
             $server['HTTP_X_AUTH_REQUEST_EMAIL'] = $email;
-            $server += ['HTTP_X_MPASS_EDGE_SECRET' => self::EDGE_SECRET]; // a caller may override it
         }
+        // The protected router adds the edge secret to every request it forwards, with or without
+        // an identity. A caller may override it ('' = absent, as from inside the network).
+        $server += ['HTTP_X_MPASS_EDGE_SECRET' => self::EDGE_SECRET];
         $this->client->request($method, $path, [], [], $server);
 
         return $this->client->getResponse();

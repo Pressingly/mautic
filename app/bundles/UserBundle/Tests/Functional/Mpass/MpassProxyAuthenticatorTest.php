@@ -373,31 +373,44 @@ final class MpassProxyAuthenticatorTest extends AbstractMpassTestCase
 
     // --- edge secret (review finding 2a) -------------------------------------------------------
 
-    public function testIdentityHeadersWithoutOrWithWrongEdgeSecretAreAbsent(): void
+    public function testAdminUiWithoutOrWithWrongEdgeSecretIs403(): void
     {
         $count = $this->userCount();
 
         // A container on the shared network, or Mautic's own outbound HTTP, can reach Apache
-        // directly with any header. Without the edge secret the identity does not exist.
-        $this->assertAnonymous($this->get('/s/account', 'forged@example.com', ['HTTP_X_MPASS_EDGE_SECRET' => '']));
-        $this->assertAnonymous($this->get('/s/account', 'forged@example.com', ['HTTP_X_MPASS_EDGE_SECRET' => 'wrong-'.self::EDGE_SECRET]));
+        // directly with any header. On the admin UI that is refused outright (round-2 R2-5)...
+        foreach (['', 'wrong-'.self::EDGE_SECRET] as $secret) {
+            foreach (['/s/account', '/s/dashboard', '/s/keep-alive', '/%73/account'] as $path) {
+                $response = $this->get($path, 'forged@example.com', ['HTTP_X_MPASS_EDGE_SECRET' => $secret]);
+                self::assertSame(403, $response->getStatusCode(), "{$path} with secret '{$secret}'");
+            }
+        }
         self::assertSame($count, $this->userCount(), 'nobody provisioned');
 
-        // ...and absence is not a mismatch: an existing session is kept, not flushed.
+        // ...an existing session is neither served nor flushed by such a request...
         $alice = $this->createUser('alice@example.com');
         $this->loginUser($alice);
         $before = $this->sessionId();
-        $this->assertServedAs('alice@example.com', $this->get('/s/account', 'mallory@example.com', ['HTTP_X_MPASS_EDGE_SECRET' => 'wrong']));
+        self::assertSame(403, $this->get('/s/account', 'mallory@example.com', ['HTTP_X_MPASS_EDGE_SECRET' => 'wrong'])->getStatusCode());
         self::assertSame($before, $this->sessionId());
+        $this->assertServedAs('alice@example.com', $this->get('/s/account', 'alice@example.com'));
     }
 
-    public function testUnsetEdgeSecretTrustsNothing(): void
+    public function testBypassPathWithoutEdgeSecretIsServedAndTrustsNoIdentity(): void
+    {
+        $count = $this->userCount();
+
+        self::assertSame(200, $this->get('/mtracking.gif', 'forged@example.com', ['HTTP_X_MPASS_EDGE_SECRET' => ''])->getStatusCode());
+        self::assertSame($count, $this->userCount());
+    }
+
+    public function testUnsetOrShortEdgeSecretTrustsNothing(): void
     {
         $this->restartWithEnv('MPASS_EDGE_SECRET', null);
-        $this->assertAnonymous($this->get('/s/account', 'forged@example.com', ['HTTP_X_MPASS_EDGE_SECRET' => '']));
+        self::assertSame(403, $this->get('/s/account', 'forged@example.com', ['HTTP_X_MPASS_EDGE_SECRET' => ''])->getStatusCode());
 
         $this->restartWithEnv('MPASS_EDGE_SECRET', 'short');
-        $this->assertAnonymous($this->get('/s/account', 'forged@example.com', ['HTTP_X_MPASS_EDGE_SECRET' => 'short']));
+        self::assertSame(403, $this->get('/s/account', 'forged@example.com', ['HTTP_X_MPASS_EDGE_SECRET' => 'short'])->getStatusCode());
         self::assertNull($this->findUser('forged@example.com'));
     }
 
