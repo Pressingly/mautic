@@ -63,7 +63,9 @@ return function (ContainerConfigurator $configurator): void {
             '$authType'           => '%env(default::AUTH_TYPE)%',
             '$defaultEmailDomain' => '%env(default::DEFAULT_EMAIL_DOMAIN)%',
             '$corporateId'        => '%env(default::SMB_CORPORATE_ID)%',
+            '$edgeSecret'         => '%env(default::MPASS_EDGE_SECRET)%',
         ]);
+    $services->set(Mautic\UserBundle\Security\Mpass\MpassOutboundGuard::class);
     $services->set(Mautic\UserBundle\Security\Authenticator\MpassProxyAuthenticator::class)
         ->arg('$defaultRole', '%env(default::MPASS_SSO_DEFAULT_ROLE)%')
         ->arg('$logger', service('monolog.logger.mautic'));

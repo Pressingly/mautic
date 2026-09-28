@@ -9,6 +9,7 @@ use Mautic\CoreBundle\Helper\AbstractFormFieldHelper;
 use Mautic\LeadBundle\Entity\CompanyRepository;
 use Mautic\LeadBundle\Entity\Lead;
 use Mautic\LeadBundle\Helper\TokenHelper;
+use Mautic\UserBundle\Security\Mpass\MpassOutboundGuard;
 use Mautic\WebhookBundle\Event\WebhookRequestEvent;
 use Mautic\WebhookBundle\WebhookEvents;
 use Symfony\Component\EventDispatcher\EventDispatcherInterface;
@@ -24,6 +25,7 @@ final class CampaignHelper
         private readonly Client $client,
         private readonly EventDispatcherInterface $dispatcher,
         private readonly CompanyRepository $companyRepository,
+        private readonly ?MpassOutboundGuard $mpassOutboundGuard = null, // fork: mPass SSO only
     ) {
     }
 
@@ -78,13 +80,16 @@ final class CampaignHelper
      */
     private function makeRequest(string $url, string $method, $timeout, array $headers, array $payload): void
     {
+        // Under mPass SSO: no private/loopback targets, no redirects (MpassOutboundGuard).
+        $guardOptions = $this->mpassOutboundGuard?->check($url) ?? [];
+
         switch ($method) {
             case 'get':
                 $payload  = $url.(parse_url($url, PHP_URL_QUERY) ? '&' : '?').http_build_query($payload);
                 $response = $this->client->get($payload, [
                     RequestOptions::HEADERS => $headers,
                     RequestOptions::TIMEOUT => $timeout,
-                ]);
+                ] + $guardOptions);
                 break;
             case 'post':
             case 'put':
@@ -93,7 +98,7 @@ final class CampaignHelper
                 $options  = [
                     RequestOptions::HEADERS     => $headers,
                     RequestOptions::TIMEOUT     => $timeout,
-                ];
+                ] + $guardOptions;
                 if (array_key_exists('content-type', $headers) && 'application/json' === strtolower($headers['content-type'])) {
                     $options[RequestOptions::BODY] = json_encode($payload);
                 } else {
@@ -105,7 +110,7 @@ final class CampaignHelper
                 $response = $this->client->delete($url, [
                     RequestOptions::HEADERS => $headers,
                     RequestOptions::TIMEOUT => $timeout,
-                ]);
+                ] + $guardOptions);
                 break;
             default:
                 throw new \InvalidArgumentException('HTTP method "'.$method.' is not supported."');

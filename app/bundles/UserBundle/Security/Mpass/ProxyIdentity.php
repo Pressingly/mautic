@@ -13,7 +13,12 @@ use Symfony\Component\HttpFoundation\Request;
  *  1. the Mautic container publishes no port; Traefik is the only way in;
  *  2. every Mautic router runs strip-auth-headers before mpass-auth, so a client cannot inject
  *     X-Auth-Request-*;
- *  3. oauth2-proxy validates the upstream session and injects the headers on every request.
+ *  3. oauth2-proxy validates the upstream session and injects the headers on every request;
+ *  4. the protected router adds X-Mpass-Edge-Secret = MPASS_EDGE_SECRET, and every Mautic router
+ *     strips a client-sent copy. Link 1 only holds for the outside world: other containers on the
+ *     same networks, and Mautic's own outbound HTTP (campaign webhooks, form repost), can reach
+ *     Apache directly with any headers. So the identity headers are trusted only on a request that
+ *     carries the edge secret; without it they are treated as absent.
  *
  * All settings come from the process env (or a dotenv file) via %env(default::…)%, resolved when
  * the service is built for a request, never from a Mautic config key and never at container compile
@@ -31,6 +36,8 @@ final class ProxyIdentity
 
     public const ACCESS_TOKEN_HEADER = 'X-Auth-Request-Access-Token';
 
+    public const EDGE_SECRET_HEADER = 'X-Mpass-Edge-Secret';
+
     /** users.email / users.username are varchar(191). */
     private const MAX_EMAIL_LENGTH = 191;
 
@@ -38,6 +45,7 @@ final class ProxyIdentity
         private readonly ?string $authType,
         private readonly ?string $defaultEmailDomain,
         private readonly ?string $corporateId,
+        private readonly ?string $edgeSecret = null,
     ) {
     }
 
@@ -57,7 +65,20 @@ final class ProxyIdentity
      */
     public function asserted(Request $request): string
     {
-        return self::normalise($request->headers->get(self::EMAIL_HEADER));
+        return $this->fromEdge($request) ? self::normalise($request->headers->get(self::EMAIL_HEADER)) : '';
+    }
+
+    /**
+     * True only when the request came through the protected Traefik router: it carries the edge
+     * secret, compared in constant time. An unset or short MPASS_EDGE_SECRET trusts nothing (the
+     * image refuses to start under SSO without one).
+     */
+    public function fromEdge(Request $request): bool
+    {
+        $secret = (string) $this->edgeSecret;
+
+        return strlen($secret) >= 32
+            && hash_equals($secret, (string) $request->headers->get(self::EDGE_SECRET_HEADER, ''));
     }
 
     /**
@@ -106,6 +127,9 @@ final class ProxyIdentity
             return true;
         }
 
+        if (!$this->fromEdge($request)) {
+            return false;
+        }
         $claims = self::decodeJwtPayload((string) $request->headers->get(self::ACCESS_TOKEN_HEADER, ''));
 
         return null !== $claims
