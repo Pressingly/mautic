@@ -6,6 +6,7 @@ namespace Mautic\UserBundle\Tests\Functional\Mpass;
 
 use Mautic\UserBundle\Entity\User;
 use Mautic\UserBundle\EventListener\MpassLocalAuthGuard;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Symfony\Component\BrowserKit\Cookie;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
@@ -39,6 +40,7 @@ final class MpassLocalAuthGuardTest extends AbstractMpassTestCase
         ['POST', '/s/users/invite'],
         ['POST', '/s/users/INVITE'], // PHP method names are case-insensitive
         ['POST', '/api/users/new'],
+        ['POST', '/oauth/v2/token'], // OAuth2 token minting (review finding 3)
     ];
 
     /**
@@ -92,22 +94,110 @@ final class MpassLocalAuthGuardTest extends AbstractMpassTestCase
 
     public function testRouteInventory(): void
     {
-        $issuers   = '/->(setPassword|checkNewPassword|hashPassword|createInvite|setToken)\(|->loginUser\(/';
+        // Credential setters, session issuers and OAuth2 token minting.
+        $issuers   = '/->(setPassword|checkNewPassword|hashPassword|createInvite|setToken|grantAccessToken|createAccessToken)\(|->loginUser\(/';
         $unguarded = [];
+        $sensitive = [];
 
         foreach (static::getContainer()->get(RouterInterface::class)->getRouteCollection() as $name => $route) {
             $controller = $route->getDefault('_controller');
             $class      = is_string($controller) ? explode('::', $controller)[0] : null;
-            $sensitive  = null === $controller && preg_match(MpassLocalAuthGuard::MAIN_FIREWALL_PATH, $route->getPath()) // firewall-handled
+            if (null !== $class && !class_exists($class) && static::getContainer()->has($class)) {
+                $class = get_class(static::getContainer()->get($class)); // controller given as a service id
+            }
+            $isSensitive = null === $controller && preg_match(MpassLocalAuthGuard::MAIN_FIREWALL_PATH, $route->getPath()) // firewall-handled
                 || (null !== $class && class_exists($class) && preg_match($issuers, (string) file_get_contents((new \ReflectionClass($class))->getFileName())))
                 || (User::class === $route->getDefault('_api_resource_class') && array_intersect($route->getMethods(), ['POST', 'PUT', 'PATCH']));
 
-            if ($sensitive && !MpassLocalAuthGuard::isGatedRoute($name, new Request()) && !isset(self::ALLOWED[$name])) {
+            if ($isSensitive) {
+                $sensitive[] = $name;
+            }
+            if ($isSensitive && !MpassLocalAuthGuard::isGatedRoute($name, new Request()) && !isset(self::ALLOWED[$name])) {
                 $unguarded[] = $name.' ('.$route->getPath().')';
             }
         }
 
         self::assertSame([], $unguarded, 'credential-setting or session-issuing routes that are neither gated nor allow-listed');
+        self::assertContains('fos_oauth_server_token', $sensitive, 'the inventory sees OAuth2 token minting');
+    }
+
+    /**
+     * @return iterable<string, array{string, string}>
+     */
+    public static function gatedRequests(): iterable
+    {
+        foreach (self::GATED_REQUESTS as [$method, $path]) {
+            yield "{$method} {$path}" => [$method, $path];
+        }
+    }
+
+    /**
+     * identity-surface-gating §"The gate does not affect non-SSO deployments", per endpoint:
+     * without AUTH_TYPE the guard's empty 404 never appears (upstream answers, whatever it says).
+     */
+    #[DataProvider('gatedRequests')]
+    public function testGatedEndpointIsUpstreamWithoutSso(string $method, string $path): void
+    {
+        $this->restartWithEnv('AUTH_TYPE', null);
+
+        $response = $this->get($path, null, [], $method);
+
+        self::assertFalse(Response::HTTP_NOT_FOUND === $response->getStatusCode() && '' === $response->getContent(), "{$method} {$path} was refused by the SSO guard");
+    }
+
+    // --- review findings 3 and 4 --------------------------------------------------------------
+
+    public function testOauthAccessTokenParameterIsRefusedUnderSso(): void
+    {
+        self::assertSame(Response::HTTP_UNAUTHORIZED, $this->get('/s/account?access_token=x', null)->getStatusCode(), 'query');
+        $this->client->request('POST', '/s/account', ['access_token' => 'x']);
+        self::assertSame(Response::HTTP_UNAUTHORIZED, $this->client->getResponse()->getStatusCode(), 'body');
+        self::assertSame(Response::HTTP_UNAUTHORIZED, $this->get('/api/contacts?access_token=x', null)->getStatusCode(), 'API query');
+        self::assertSame(Response::HTTP_UNAUTHORIZED, $this->get('/api/contacts', null, ['HTTP_AUTHORIZATION' => 'Bearer x'])->getStatusCode(), 'API bearer');
+        self::assertSame(Response::HTTP_UNAUTHORIZED, $this->get('/api/v2/docs.json', null, ['PHP_AUTH_USER' => 'admin', 'PHP_AUTH_PW' => 'Maut1cR0cks!'])->getStatusCode(), 'API v2 basic');
+        // (API v2 user routes answer 404 before any credential check: they are gated routes.)
+        self::assertSame(Response::HTTP_NOT_FOUND, $this->get('/api/v2/users', null, ['PHP_AUTH_USER' => 'admin', 'PHP_AUTH_PW' => 'Maut1cR0cks!'], 'POST')->getStatusCode(), 'API v2 user write');
+    }
+
+    public function testEncodedPathCannotSkipTheCredentialCheck(): void
+    {
+        self::assertSame(Response::HTTP_UNAUTHORIZED, $this->get('/%73/account', null, ['HTTP_AUTHORIZATION' => 'Bearer x'])->getStatusCode());
+        self::assertSame(Response::HTTP_UNAUTHORIZED, $this->get('/%73/account?access_token=x', null)->getStatusCode());
+    }
+
+    public function testBogusAccessTokensDoNotLockOutAnMpassLogin(): void
+    {
+        for ($i = 0; $i < 20; ++$i) {
+            $this->client->getCookieJar()->clear();
+            self::assertSame(Response::HTTP_UNAUTHORIZED, $this->get('/s/account?access_token=bogus'.$i, null)->getStatusCode());
+        }
+
+        $this->client->getCookieJar()->clear();
+        $this->createUser('alice@example.com');
+        $this->assertServedAs('alice@example.com', $this->get('/s/account', 'alice@example.com'));
+    }
+
+    // --- review finding 13 ---------------------------------------------------------------------
+
+    public function testAdminCreateAndEditStoreLowercaseEmails(): void
+    {
+        $this->createUser('alice@example.com');
+        $legacy = $this->createUser('Legacy.User@Example.COM', username: 'legacy');
+        $this->get('/s/account', 'alice@example.com');
+
+        $this->submitWithExtras('/s/users/new', [
+            'email'     => '  Carol.New@Example.COM ',
+            'firstName' => 'Carol',
+            'lastName'  => 'Example',
+            'role'      => (string) $this->memberRole->getId(),
+        ]);
+        $carol = $this->findUser('carol.new@example.com');
+        self::assertNotNull($carol, 'stored lowercase and trimmed');
+        self::assertSame('carol.new@example.com', $carol->getUserIdentifier());
+
+        $this->restart();
+        $this->submitWithExtras('/s/users/edit/'.$legacy->getId(), ['firstName' => 'Legacy']);
+        self::assertSame('legacy.user@example.com', $this->reload($legacy)->getEmail());
     }
 
     public function testAuthorizationHeaderRefusedOnMainUnderSso(): void
@@ -301,7 +391,7 @@ final class MpassLocalAuthGuardTest extends AbstractMpassTestCase
      */
     private function submitWithExtras(string $path, array $fields, array $dropFromRendered = []): void
     {
-        $crawler = $this->client->request('GET', $path, [], [], ['HTTP_X_AUTH_REQUEST_EMAIL' => 'alice@example.com']);
+        $crawler = $this->client->request('GET', $path, [], [], ['HTTP_X_AUTH_REQUEST_EMAIL' => 'alice@example.com', 'HTTP_X_MPASS_EDGE_SECRET' => self::EDGE_SECRET]);
         self::assertSame(Response::HTTP_OK, $this->client->getResponse()->getStatusCode(), $path);
         $values = $crawler->filter('form[name=user]')->form()->getPhpValues();
         foreach ($dropFromRendered as $name) {
@@ -310,7 +400,7 @@ final class MpassLocalAuthGuardTest extends AbstractMpassTestCase
         $values['user'] = array_replace($values['user'], $fields);
         $values['user']['buttons']['save'] = '';
 
-        $this->client->request('POST', $path, $values, [], ['HTTP_X_AUTH_REQUEST_EMAIL' => 'alice@example.com']);
+        $this->client->request('POST', $path, $values, [], ['HTTP_X_AUTH_REQUEST_EMAIL' => 'alice@example.com', 'HTTP_X_MPASS_EDGE_SECRET' => self::EDGE_SECRET]);
         self::assertLessThan(500, $this->client->getResponse()->getStatusCode(), "POST {$path} must not crash");
     }
 

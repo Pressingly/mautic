@@ -21,7 +21,10 @@ abstract class AbstractMpassTestCase extends MauticMysqlTestCase
 {
     protected $useCleanupRollback = false;
 
-    private const ENV = ['AUTH_TYPE', 'MPASS_SSO_DEFAULT_ROLE', 'DEFAULT_EMAIL_DOMAIN', 'SMB_CORPORATE_ID', 'MPASS_PORTAL_URL'];
+    private const ENV = ['AUTH_TYPE', 'MPASS_SSO_DEFAULT_ROLE', 'DEFAULT_EMAIL_DOMAIN', 'SMB_CORPORATE_ID', 'MPASS_PORTAL_URL', 'MPASS_EDGE_SECRET'];
+
+    /** What the protected Traefik router injects; tests send it wherever the edge would. */
+    protected const EDGE_SECRET = 'test-edge-secret-0123456789abcdef0123456789';
 
     protected Role $adminRole;
 
@@ -30,6 +33,7 @@ abstract class AbstractMpassTestCase extends MauticMysqlTestCase
     protected function setUp(): void
     {
         self::setEnv('AUTH_TYPE', 'SSO');
+        self::setEnv('MPASS_EDGE_SECRET', self::EDGE_SECRET);
         parent::setUp();
 
         $this->adminRole  = $this->createRole('mPass test admins', true);
@@ -81,6 +85,7 @@ abstract class AbstractMpassTestCase extends MauticMysqlTestCase
     {
         if (null !== $email) {
             $server['HTTP_X_AUTH_REQUEST_EMAIL'] = $email;
+            $server += ['HTTP_X_MPASS_EDGE_SECRET' => self::EDGE_SECRET]; // a caller may override it
         }
         $this->client->request($method, $path, [], [], $server);
 

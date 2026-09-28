@@ -346,6 +346,77 @@ final class MpassProxyAuthenticatorTest extends AbstractMpassTestCase
         self::assertNotNull($this->reload($alice)->getLastLogin(), 're-established by Rule 3');
     }
 
+    // --- edge secret (review finding 2a) -------------------------------------------------------
+
+    public function testIdentityHeadersWithoutOrWithWrongEdgeSecretAreAbsent(): void
+    {
+        $count = $this->userCount();
+
+        // A container on the shared network, or Mautic's own outbound HTTP, can reach Apache
+        // directly with any header. Without the edge secret the identity does not exist.
+        $this->assertAnonymous($this->get('/s/account', 'forged@example.com', ['HTTP_X_MPASS_EDGE_SECRET' => '']));
+        $this->assertAnonymous($this->get('/s/account', 'forged@example.com', ['HTTP_X_MPASS_EDGE_SECRET' => 'wrong-'.self::EDGE_SECRET]));
+        self::assertSame($count, $this->userCount(), 'nobody provisioned');
+
+        // ...and absence is not a mismatch: an existing session is kept, not flushed.
+        $alice = $this->createUser('alice@example.com');
+        $this->loginUser($alice);
+        $before = $this->sessionId();
+        $this->assertServedAs('alice@example.com', $this->get('/s/account', 'mallory@example.com', ['HTTP_X_MPASS_EDGE_SECRET' => 'wrong']));
+        self::assertSame($before, $this->sessionId());
+    }
+
+    public function testUnsetEdgeSecretTrustsNothing(): void
+    {
+        $this->restartWithEnv('MPASS_EDGE_SECRET', null);
+        $this->assertAnonymous($this->get('/s/account', 'forged@example.com', ['HTTP_X_MPASS_EDGE_SECRET' => '']));
+
+        $this->restartWithEnv('MPASS_EDGE_SECRET', 'short');
+        $this->assertAnonymous($this->get('/s/account', 'forged@example.com', ['HTTP_X_MPASS_EDGE_SECRET' => 'short']));
+        self::assertNull($this->findUser('forged@example.com'));
+    }
+
+    // --- review finding 15 ---------------------------------------------------------------------
+
+    public function testWhitespaceOnlyHeaderKeepsTheSession(): void
+    {
+        $alice = $this->createUser('alice@example.com');
+        $this->loginUser($alice);
+        $before = $this->sessionId();
+
+        $this->assertServedAs('alice@example.com', $this->get('/s/account', " \t "));
+        self::assertSame($before, $this->sessionId());
+    }
+
+    public function testNewEmailOnTheTrackingPixelCreatesNoUser(): void
+    {
+        $count = $this->userCount();
+
+        self::assertSame(Response::HTTP_OK, $this->get('/mtracking.gif', 'pixel@example.com')->getStatusCode());
+        self::assertSame($count, $this->userCount());
+        self::assertNull($this->findUser('pixel@example.com'));
+    }
+
+    // --- review finding 8 ----------------------------------------------------------------------
+
+    public function testMismatchDropsAnAnonymousSessionLeftBehind(): void
+    {
+        $this->createUser('bob@example.com');
+        // An anonymous session with attributes a previous visitor left (no security token in it).
+        $previous = static::getContainer()->get('session.factory')->createSession();
+        $previous->start();
+        $previous->set('mpass_previous_visitor', 'alice-state');
+        $previous->save();
+        $this->client->getCookieJar()->set(new \Symfony\Component\BrowserKit\Cookie($this->sessionName(), $previous->getId()));
+
+        $this->assertServedAs('bob@example.com', $this->get('/s/account', 'bob@example.com'));
+
+        self::assertNotSame($previous->getId(), $this->sessionId(), 'a new session id');
+        $file = static::getContainer()->getParameter('kernel.cache_dir').'/sessions/'.$this->sessionId().'.mocksess';
+        self::assertFileExists($file);
+        self::assertStringNotContainsString('alice-state', (string) file_get_contents($file), 'bob did not inherit it');
+    }
+
     // --- helpers ------------------------------------------------------------------------------
 
     private static function b64(string $s): string
