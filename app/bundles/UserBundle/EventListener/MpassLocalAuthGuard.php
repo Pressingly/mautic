@@ -36,6 +36,9 @@ final class MpassLocalAuthGuard implements EventSubscriberInterface
     /** Same pattern as the `main` firewall in app/config/security.php. */
     public const MAIN_FIREWALL_PATH = '#^/(s/|elfinder|efconnect)#';
 
+    /** `main` plus the API firewalls (`api`, `v2api`): where a bearer/basic credential is read. */
+    private const CREDENTIAL_PATH = '#^/(s/|elfinder|efconnect|api(/|$))#';
+
     /** Routes that set a local password, create a user outside mPass, or issue a session → 404. */
     public const GATED_ROUTES = [
         'mautic_user_logincheck',
@@ -46,6 +49,7 @@ final class MpassLocalAuthGuard implements EventSubscriberInterface
         'mautic_sso_login',
         'mautic_sso_login_check',
         'fos_oauth_server_authorize',
+        'fos_oauth_server_token',
         'mautic_oauth2_server_auth_login',
         'mautic_oauth2_server_auth_login_check',
     ];
@@ -109,7 +113,7 @@ final class MpassLocalAuthGuard implements EventSubscriberInterface
     {
         $request = $event->getRequest();
         if (!$event->isMainRequest() || !$this->identity->isSso()
-            || preg_match(self::MAIN_FIREWALL_PATH, $request->getPathInfo())) {
+            || preg_match(self::MAIN_FIREWALL_PATH, self::path($request))) {
             return;
         }
 
@@ -180,12 +184,27 @@ final class MpassLocalAuthGuard implements EventSubscriberInterface
                 : $this->mpassPage('signin');
         }
 
-        // G11: no bearer/basic credential on the admin UI, so no M2M exemption can be abused.
-        if ($request->headers->has('Authorization') && preg_match(self::MAIN_FIREWALL_PATH, $request->getPathInfo())) {
+        // G11: no bearer/basic credential on the admin UI or the API, in the header or as the
+        // `access_token` parameter FOSOAuthServer also reads. The API is off (api_enabled=false),
+        // but nothing may depend on that alone: an OAuth2/basic login would be a second way in,
+        // and every failed one would count against the login throttle of the whole address.
+        if (preg_match(self::CREDENTIAL_PATH, self::path($request))
+            && ($request->headers->has('Authorization')
+                || $request->query->has('access_token')
+                || $request->request->has('access_token'))) {
             return new Response('', Response::HTTP_UNAUTHORIZED);
         }
 
         return null;
+    }
+
+    /**
+     * The path as the firewall and router match it: they rawurldecode() the path info, so
+     * `/%73/dashboard` is `/s/dashboard` to them and must be to us.
+     */
+    private static function path(Request $request): string
+    {
+        return rawurldecode($request->getPathInfo());
     }
 
     private function mpassPage(string $reason): Response
