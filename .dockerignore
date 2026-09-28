@@ -38,3 +38,5 @@ media/images/*
 !media/images/.htaccess
 media/dashboards/*
 !media/dashboards/*.json
+# Devkit env for docker/mpass/docker-compose.devkit.yml (secrets)
+docker/mpass/.env
