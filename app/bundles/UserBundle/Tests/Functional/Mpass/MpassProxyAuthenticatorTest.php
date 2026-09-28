@@ -228,8 +228,33 @@ final class MpassProxyAuthenticatorTest extends AbstractMpassTestCase
 
     public function testCorporateUnsetSkipsCheck(): void
     {
+        // Only with the explicit opt-in (set by the test base, as the devkit sets it).
         $this->createUser('alice@example.com');
         $this->assertServedAs('alice@example.com', $this->get('/s/account', 'alice@example.com'));
+    }
+
+    public function testCorporateUnsetWithoutOptInRefusesEveryone(): void
+    {
+        // Round-2 review: fail closed in the app too, not only in the entrypoint.
+        $this->restartWithEnv('MPASS_ALLOW_ANY_TENANT', null);
+        $alice = $this->createUser('alice@example.com');
+        $count = $this->userCount();
+
+        $this->assertRefused('corporate', $this->get('/s/account', 'alice@example.com'));
+        $this->assertRefused('corporate', $this->get('/s/account', 'newcomer@example.com'));
+        self::assertSame($count, $this->userCount(), 'nobody provisioned');
+        self::assertNull($this->reload($alice)->getLastLogin());
+
+        $this->restartWithEnv('MPASS_ALLOW_ANY_TENANT', '0');
+        $this->assertRefused('corporate', $this->get('/s/account', 'alice@example.com'), 'only "1" opts in');
+    }
+
+    public function testAllowAnyTenantDoesNotWeakenAConfiguredBinding(): void
+    {
+        $this->restartWithEnv('SMB_CORPORATE_ID', 'acme-42'); // MPASS_ALLOW_ANY_TENANT=1 is still set
+        $this->createUser('alice@example.com');
+
+        $this->assertRefused('corporate', $this->get('/s/account', 'alice@example.com', $this->token(['custom:is_corporate' => 'true', 'custom:corporate_id' => 'globex-7'])));
     }
 
     public function testCorporateMatchingPrincipalIsAdmitted(): void

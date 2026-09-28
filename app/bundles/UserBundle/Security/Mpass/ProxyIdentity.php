@@ -47,6 +47,7 @@ final class ProxyIdentity
         private readonly ?string $corporateId,
         private readonly ?string $edgeSecret = null,
         private readonly ?string $edgeSecretFile = null,
+        private readonly ?string $allowAnyTenant = null,
     ) {
     }
 
@@ -131,15 +132,19 @@ final class ProxyIdentity
     }
 
     /**
-     * Corporate-tenant binding (audit row 22). No-op when SMB_CORPORATE_ID is unset. Otherwise the
-     * access token is decoded WITHOUT verification (oauth2-proxy already validated it) and BOTH
-     * claims must match strictly. Absent or undecodable token → false; never throws.
+     * Corporate-tenant binding (audit row 22). The access token is decoded WITHOUT verification
+     * (oauth2-proxy already validated it) and BOTH claims must match strictly. Absent or undecodable
+     * token → false; never throws.
+     *
+     * Fails closed: with SMB_CORPORATE_ID unset, every principal in the Cognito pool would be
+     * admitted, so that is allowed only when the deployment says so with MPASS_ALLOW_ANY_TENANT=1
+     * (the same opt-in the image's entrypoint requires).
      */
     public function corporateOk(Request $request): bool
     {
         $required = trim((string) $this->corporateId);
         if ('' === $required) {
-            return true;
+            return '1' === trim((string) $this->allowAnyTenant);
         }
 
         if (!$this->fromEdge($request)) {

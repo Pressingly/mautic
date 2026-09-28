@@ -34,6 +34,8 @@ abstract class AbstractMpassTestCase extends MauticMysqlTestCase
     {
         self::setEnv('AUTH_TYPE', 'SSO');
         self::setEnv('MPASS_EDGE_SECRET', self::EDGE_SECRET);
+        // Tests run with SMB_CORPORATE_ID empty unless they set it; say so, as a deployment must.
+        self::setEnv('MPASS_ALLOW_ANY_TENANT', '1');
         parent::setUp();
 
         $this->adminRole  = $this->createRole('mPass test admins', true);
