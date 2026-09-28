@@ -269,7 +269,8 @@ final class UserController extends FormController
             // Username = email, as mPass provisioning does, so a pre-provisioned user cannot hold
             // another person's email as username. Both are stored normalised (lowercase, trimmed),
             // like every other email the SSO lookup compares against.
-            $formUser['email']    = ProxyIdentity::normalise($formUser['email'] ?? '');
+            $email                = $formUser['email'] ?? '';
+            $formUser['email']    = ProxyIdentity::normalise(is_string($email) ? $email : '');
             $formUser['username'] = $formUser['email'];
             $request->request->set('user', $formUser);
         }

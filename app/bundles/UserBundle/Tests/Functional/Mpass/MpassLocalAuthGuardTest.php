@@ -382,6 +382,16 @@ final class MpassLocalAuthGuardTest extends AbstractMpassTestCase
         self::assertFalse($hasher->isPasswordValid($created, $known['password']));
     }
 
+    public function testAdminCreateWithArrayEmailDoesNotCrash(): void
+    {
+        $this->createUser('alice@example.com');
+        $this->get('/s/account', 'alice@example.com');
+
+        $this->submitWithExtras('/s/users/new', ['email' => ['x@example.com']]);
+
+        self::assertNull($this->findUser('x@example.com'));
+    }
+
     /**
      * Submits the `user` form found at $path with extra/overridden fields, including fields the
      * rendered form does not have (a direct POST, bypassing the UI).
