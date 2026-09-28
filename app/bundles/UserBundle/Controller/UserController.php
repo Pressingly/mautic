@@ -265,6 +265,12 @@ final class UserController extends FormController
     private function saveNewUserIfValid(Request $request, LanguageHelper $languageHelper, User $user, FormInterface $form, bool $sso): bool
     {
         $formUser          = $request->request->all()['user'] ?? [];
+        if ($sso) {
+            // Username = email, as mPass provisioning does, so a pre-provisioned user cannot hold
+            // another person's email as username.
+            $formUser['username'] = $formUser['email'] ?? '';
+            $request->request->set('user', $formUser);
+        }
         $submittedPassword = $sso ? $user->getPlainPassword() : ($formUser['plainPassword']['password'] ?? null);
         $password          = $this->userModel->checkNewPassword($user, $submittedPassword);
         $valid             = $this->isFormValid($form);
@@ -382,8 +388,12 @@ final class UserController extends FormController
             $form->remove('plainPassword');
         }
         if ($sso) {
-            $email = $form->get('email')->getConfig();
-            $form->add('email', $email->getType()->getInnerType()::class, ['disabled' => true] + $email->getOptions());
+            // Username too: a user renamed to a colleague's email would block that colleague's
+            // first mPass login on the unique username.
+            foreach (['email', 'username'] as $field) {
+                $config = $form->get($field)->getConfig();
+                $form->add($field, $config->getType()->getInnerType()::class, ['disabled' => true] + $config->getOptions());
+            }
         }
 
         // /Check for a submitted form and process it

@@ -37,6 +37,7 @@ final class MpassLocalAuthGuardTest extends AbstractMpassTestCase
         ['GET', '/oauth/v2/authorize_login'],
         ['POST', '/oauth/v2/authorize_login_check'],
         ['POST', '/s/users/invite'],
+        ['POST', '/s/users/INVITE'], // PHP method names are case-insensitive
         ['POST', '/api/users/new'],
     ];
 
@@ -227,6 +228,29 @@ final class MpassLocalAuthGuardTest extends AbstractMpassTestCase
             self::assertSame('unused', $fresh->getPassword(), $user->getEmail().' password unchanged');
             self::assertSame($user->getEmail(), $fresh->getEmail(), $user->getEmail().' email unchanged');
         }
+    }
+
+    public function testUsernameIsLockedToEmailUnderSso(): void
+    {
+        $alice = $this->createUser('alice@example.com');
+        $bob   = $this->createUser('bob@example.com');
+        $this->get('/s/account', 'alice@example.com');
+
+        // Claiming a colleague's email as username would block their first mPass login.
+        $this->submitWithExtras('/s/account', ['username' => 'carol@example.com']);
+        $this->submitWithExtras('/s/users/edit/'.$bob->getId(), ['username' => 'carol@example.com']);
+        self::assertSame('alice@example.com', $this->reload($alice)->getUserIdentifier());
+        self::assertSame('bob@example.com', $this->reload($bob)->getUserIdentifier());
+
+        $this->restart();
+        $this->submitWithExtras('/s/users/new', [
+            'username'  => 'carol@example.com',
+            'email'     => 'dave@example.com',
+            'firstName' => 'Dave',
+            'lastName'  => 'Example',
+            'role'      => (string) $this->memberRole->getId(),
+        ]);
+        self::assertSame('dave@example.com', $this->findUser('dave@example.com')?->getUserIdentifier());
     }
 
     public function testProfileSaveStillWorksUnderSso(): void

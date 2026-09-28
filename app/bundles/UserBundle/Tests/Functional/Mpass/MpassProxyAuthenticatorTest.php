@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Mautic\UserBundle\Tests\Functional\Mpass;
 
+use Mautic\UserBundle\Entity\Role;
+use Mautic\UserBundle\Model\RoleModel;
 use Mautic\UserBundle\Security\Authenticator\MpassProxyAuthenticator;
 use Symfony\Component\HttpFoundation\Response;
 
@@ -101,6 +103,17 @@ final class MpassProxyAuthenticatorTest extends AbstractMpassTestCase
         self::assertTrue($user->isPublished());
         self::assertNotEmpty($user->getPassword());
         self::assertNotNull($user->getLastLogin(), 'InteractiveLoginEvent fired');
+    }
+
+    public function testRolePermissionsApplyOnTheFirstRequest(): void
+    {
+        $role = $this->em->find(Role::class, $this->memberRole->getId());
+        static::getContainer()->get(RoleModel::class)->setRolePermissions($role, ['user:users' => ['view']]);
+        $this->em->persist($role);
+        $this->em->flush();
+
+        // The login request itself, not the next one that reloads the user from the session.
+        self::assertSame(Response::HTTP_OK, $this->get('/s/users', 'newcomer@example.com')->getStatusCode());
     }
 
     public function testMixedCaseHeaderResolvesExistingUser(): void

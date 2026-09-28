@@ -17,8 +17,13 @@ MauticVars.activeRequests = 0;
 // Mautic (401, or a cross-origin redirect that jQuery reports as status 0). Reload the tab so the
 // top-level request goes through ForwardAuth into the mPass login. 403 is Mautic's own permission
 // denial and never triggers a reload. At most one reload per 30 s, so an outage cannot loop.
-MauticVars.mpassShouldReload = function (status, statusText, now, lastReload) {
-    if (!(401 === status || (0 === status && 'abort' !== statusText))) {
+// Status 0 also means "cancelled by navigation" or "timed out": neither reloads, or a click on
+// Logout/a download while an XHR is in flight would be replaced by a reload of this page.
+MauticVars.mpassShouldReload = function (status, statusText, now, lastReload, unloading) {
+    if (unloading) {
+        return false;
+    }
+    if (!(401 === status || (0 === status && 'abort' !== statusText && 'timeout' !== statusText))) {
         return false;
     }
 
@@ -26,12 +31,18 @@ MauticVars.mpassShouldReload = function (status, statusText, now, lastReload) {
 };
 
 if (typeof mauticMpassSso !== 'undefined' && mauticMpassSso) {
+    var mpassUnloading = false;
+    window.addEventListener('beforeunload', function () {
+        mpassUnloading = true;
+        // A download fires beforeunload but leaves the page in place.
+        setTimeout(function () { mpassUnloading = false; }, 5000);
+    });
     mQuery(document).ajaxError(function (event, jqXHR) {
         var key = 'mauticMpassReloadAt';
         var now = Date.now();
         try {
             var last = parseInt(window.sessionStorage.getItem(key), 10) || 0;
-            if (!MauticVars.mpassShouldReload(jqXHR.status, jqXHR.statusText, now, last)) {
+            if (!MauticVars.mpassShouldReload(jqXHR.status, jqXHR.statusText, now, last, mpassUnloading)) {
                 return;
             }
             window.sessionStorage.setItem(key, String(now));

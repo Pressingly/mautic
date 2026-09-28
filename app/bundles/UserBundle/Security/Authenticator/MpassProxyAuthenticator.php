@@ -8,6 +8,7 @@ use Doctrine\DBAL\Exception\UniqueConstraintViolationException;
 use Doctrine\ORM\EntityManagerInterface;
 use Doctrine\Persistence\ManagerRegistry;
 use Mautic\CoreBundle\Helper\EncryptionHelper;
+use Mautic\UserBundle\Entity\PermissionRepository;
 use Mautic\UserBundle\Entity\Role;
 use Mautic\UserBundle\Entity\User;
 use Mautic\UserBundle\Model\UserModel;
@@ -49,6 +50,7 @@ final class MpassProxyAuthenticator extends AbstractAuthenticator implements Int
         private readonly TokenStorageInterface $tokenStorage,
         private readonly ManagerRegistry $doctrine,
         private readonly UserModel $userModel,
+        private readonly PermissionRepository $permissionRepository,
         private readonly Environment $twig,
         private readonly LoggerInterface $logger,
         private readonly ?string $defaultRole,
@@ -98,6 +100,9 @@ final class MpassProxyAuthenticator extends AbstractAuthenticator implements Int
         if (!$user->isPublished()) {
             throw new MpassRefusalException(MpassRefusalException::INACTIVE);
         }
+        // As UserProvider does on a normal login; without this, isGranted denies a non-admin until
+        // the next request reloads the user from the session.
+        $user->setActivePermissions($this->permissionRepository->getPermissionsByRole($user->getRole()));
 
         return new SelfValidatingPassport(new UserBadge($user->getUserIdentifier(), fn () => $user));
     }

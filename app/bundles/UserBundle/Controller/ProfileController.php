@@ -48,7 +48,7 @@ final class ProfileController extends FormController
                 $this->security->isGranted('api:access:full')
                 : 0,
             'editName'     => $this->security->isGranted('user:profile:editname'),
-            'editUsername' => $this->security->isGranted('user:profile:editusername'),
+            'editUsername' => !$sso && $this->security->isGranted('user:profile:editusername'), // username = email under SSO
             'editPosition' => $this->security->isGranted('user:profile:editposition'),
             'editEmail'    => !$sso && $this->security->isGranted('user:profile:editemail'),
         ];

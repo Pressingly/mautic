@@ -156,7 +156,8 @@ final class MpassLocalAuthGuard implements EventSubscriberInterface
             }
         }
 
-        return 'mautic_user_action' === $route && 'invite' === $request->attributes->get('objectAction');
+        // PHP method names are case-insensitive, so /s/users/INVITE also reaches inviteAction.
+        return 'mautic_user_action' === $route && 'invite' === strtolower((string) $request->attributes->get('objectAction'));
     }
 
     private function responseFor(Request $request, string $route): ?Response

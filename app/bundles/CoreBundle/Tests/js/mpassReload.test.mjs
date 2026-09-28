@@ -11,6 +11,7 @@ function load(ssoEnabled) {
     const handlers = [];
     const storage = new Map();
     let reloads = 0;
+    const listeners = {};
 
     // Any property access or call returns the stub again, except .ajaxError, which is recorded.
     const stub = new Proxy(function () {}, {
@@ -21,8 +22,9 @@ function load(ssoEnabled) {
     const window = {
         sessionStorage: { getItem: (k) => storage.get(k) ?? null, setItem: (k, v) => storage.set(k, v) },
         location: { reload: () => { reloads += 1; }, pathname: '/s/dashboard' },
+        addEventListener: (type, fn) => { listeners[type] = fn; },
     };
-    const context = { jQuery: stub, window, document: {}, navigator: {}, mauticMpassSso: ssoEnabled, Date };
+    const context = { jQuery: stub, window, document: {}, navigator: {}, mauticMpassSso: ssoEnabled, Date, setTimeout: () => {} };
     vm.createContext(context);
     try {
         vm.runInContext(source, context);
@@ -34,6 +36,7 @@ function load(ssoEnabled) {
         handlers,
         fire: (status, statusText = 'error') => handlers.forEach((h) => h({}, { status, statusText })),
         reloads: () => reloads,
+        unload: () => listeners.beforeunload(),
         shouldReload: context.MauticVars.mpassShouldReload,
     };
 }
@@ -54,6 +57,18 @@ test('status 0 (off-origin redirect) reloads, an aborted request does not', () =
     const redirected = load(true);
     redirected.fire(0, 'error');
     assert.equal(redirected.reloads(), 1);
+});
+
+test('a timeout or a request cancelled by navigation never reloads', () => {
+    const timedOut = load(true);
+    timedOut.fire(0, 'timeout');
+    assert.equal(timedOut.reloads(), 0);
+
+    const navigating = load(true);
+    navigating.unload();
+    navigating.fire(0, 'error');
+    navigating.fire(401);
+    assert.equal(navigating.reloads(), 0);
 });
 
 test('403 is a permission denial and never reloads', () => {
