@@ -7,7 +7,7 @@ import vm from 'node:vm';
 
 const source = readFileSync(new URL('../../Assets/js/1.core.js', import.meta.url), 'utf8');
 
-function load(ssoEnabled) {
+function load(ssoEnabled, { online = true } = {}) {
     const handlers = [];
     const storage = new Map();
     let reloads = 0;
@@ -23,6 +23,7 @@ function load(ssoEnabled) {
         sessionStorage: { getItem: (k) => storage.get(k) ?? null, setItem: (k, v) => storage.set(k, v) },
         location: { reload: () => { reloads += 1; }, pathname: '/s/dashboard' },
         addEventListener: (type, fn) => { listeners[type] = fn; },
+        navigator: { onLine: online },
     };
     const context = { jQuery: stub, window, document: {}, navigator: {}, mauticMpassSso: ssoEnabled, Date, setTimeout: () => {} };
     vm.createContext(context);
@@ -34,7 +35,8 @@ function load(ssoEnabled) {
 
     return {
         handlers,
-        fire: (status, statusText = 'error') => handlers.forEach((h) => h({}, { status, statusText })),
+        fire: (status, statusText = 'error', crossDomain = false) =>
+            handlers.forEach((h) => h({}, { status, statusText }, { crossDomain })),
         reloads: () => reloads,
         unload: () => listeners.beforeunload(),
         shouldReload: context.MauticVars.mpassShouldReload,
@@ -87,4 +89,18 @@ test('the 30 s loop guard', () => {
     assert.equal(shouldReload(401, 'error', 100000, 80000), false);
     assert.equal(shouldReload(401, 'error', 110000, 80000), true);
     assert.equal(shouldReload(401, 'error', 110000, 0), true);
+});
+
+test('a cross-origin request never reloads (the gateway only fronts this origin)', () => {
+    const tab = load(true);
+    tab.fire(401, 'error', true);
+    tab.fire(0, 'error', true);
+    assert.equal(tab.reloads(), 0);
+});
+
+test('an offline browser never reloads', () => {
+    const tab = load(true, { online: false });
+    tab.fire(0, 'error');
+    tab.fire(401);
+    assert.equal(tab.reloads(), 0);
 });
