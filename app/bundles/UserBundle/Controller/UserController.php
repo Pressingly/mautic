@@ -267,8 +267,10 @@ final class UserController extends FormController
         $formUser          = $request->request->all()['user'] ?? [];
         if ($sso) {
             // Username = email, as mPass provisioning does, so a pre-provisioned user cannot hold
-            // another person's email as username.
-            $formUser['username'] = $formUser['email'] ?? '';
+            // another person's email as username. Both are stored normalised (lowercase, trimmed),
+            // like every other email the SSO lookup compares against.
+            $formUser['email']    = ProxyIdentity::normalise($formUser['email'] ?? '');
+            $formUser['username'] = $formUser['email'];
             $request->request->set('user', $formUser);
         }
         $submittedPassword = $sso ? $user->getPlainPassword() : ($formUser['plainPassword']['password'] ?? null);
@@ -410,6 +412,12 @@ final class UserController extends FormController
                 if ($valid = $this->isFormValid($form)) {
                     // form is valid so process the data
                     $user->setPassword($password);
+                    if ($sso) {
+                        // The field is disabled under SSO; normalise a legacy mixed-case value.
+                        $user->setEmail(ProxyIdentity::normalise($user->getEmail()));
+                        $newEmail = $user->getEmail();
+                        $oldEmail = $newEmail; // a case change is not an email change: no notice
+                    }
                     $this->userModel->saveEntity($user, $this->getFormButton($form, ['buttons', 'save'])->isClicked());
                     if (!empty($submittedPassword)) {
                         $this->userModel->sendChangePasswordInfo($user);

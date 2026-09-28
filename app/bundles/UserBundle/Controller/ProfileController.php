@@ -241,7 +241,9 @@ final class ProfileController extends FormController
         $request->getSession()->set('formProcessed', 0);
 
         $isSamlUser    = $sso || $samlHelper->isSamlSession();
-        if ($isSamlUser && $form->has('plainPassword') && !$form->isSubmitted()) {
+        // Upstream's SAML path, unchanged without SSO. Under SSO the field was already removed
+        // before the POST was processed.
+        if (!$sso && $isSamlUser) {
             $form->remove('plainPassword');
         }
 

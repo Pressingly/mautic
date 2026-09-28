@@ -127,16 +127,21 @@ final class MpassProxyAuthenticator extends AbstractAuthenticator implements Int
         return true;
     }
 
+    /**
+     * authenticate() only runs when the asserted identity is not the session's, so any existing
+     * session belongs to someone else: a token for A, or an anonymous session A left behind with
+     * attributes (locale, timezone, form state). Invalidate it either way, so B never inherits it.
+     */
     private function flush(Request $request): void
     {
-        if (null === $this->tokenStorage->getToken()) {
-            return;
-        }
-        if ($request->hasSession()) {
+        $hadToken = null !== $this->tokenStorage->getToken();
+        if ($request->hasSession() && ($hadToken || $request->hasPreviousSession())) {
             $request->getSession()->invalidate();
         }
-        $this->tokenStorage->setToken(null);
-        $request->attributes->set(self::EXPIRE_REMEMBER_ME, true);
+        if ($hadToken) {
+            $this->tokenStorage->setToken(null);
+            $request->attributes->set(self::EXPIRE_REMEMBER_ME, true);
+        }
     }
 
     /**
