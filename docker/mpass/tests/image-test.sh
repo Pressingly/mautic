@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+ #!/usr/bin/env bash
 # Image-level tests for the mPass SSO build (sso-rules-moneta tasks 5.23, 5.26, 5.29, plus the
 # entrypoint's refusals). They need a real container, so they are not PHPUnit tests.
 #
@@ -72,16 +72,34 @@ check "5.26 session cookie is Secure" 'grep -qi "; secure" <<<"$cookie"'
 check "5.26 session cookie is HttpOnly" 'grep -qi "; httponly" <<<"$cookie"'
 check "5.26 session cookie is SameSite=Lax" 'grep -qi "samesite=lax" <<<"$cookie"'
 check "5.26 cookie Max-Age = SESSION_TTL_SECONDS" 'grep -qi "max-age=3600" <<<"$cookie"'
-loc=$(curl_in -o /dev/null -w '%{redirect_url}' "${edge[@]}" "http://$NAME/s/login")
-check "5.26 isSecure() behind the proxy: Symfony redirects to https" '[[ "$loc" == https://$HOST/* ]]'
+# isSecure() behind the trusted proxy: with X-Forwarded-Proto https the request counts as secure
+# (served); with http Mautic sends the visitor to https. (Symfony's own redirects are relative, so
+# they cannot show the scheme.)
+code=$(curl_in -o /dev/null -w '%{http_code}' -H "Host: $HOST" -H "X-Forwarded-Proto: https" "http://$NAME/mtc.js")
+check "5.26 isSecure() true behind the proxy (X-Forwarded-Proto: https served)" '[ "$code" = 200 ]'
+loc=$(curl_in -o /dev/null -w '%{http_code} %{redirect_url}' -H "Host: $HOST" -H "X-Forwarded-Proto: http" "http://$NAME/mtc.js")
+check "5.26 isSecure() false for X-Forwarded-Proto: http (sent to https)" '[[ "$loc" == 30?" https://$HOST/"* ]]'
 loc=$(curl_in -o /dev/null -w '%{redirect_url}' -H "Host: $HOST" "http://$NAME/index.php/form/1")
 check "Apache's /index.php/ 301 targets https://" '[[ "$loc" == https://$HOST/* ]]'
 
-# Edge secret: a forged identity without it is anonymous.
-forged=$(curl_in -o /dev/null -w '%{http_code} %{redirect_url}' -H "Host: $HOST" -H "X-Forwarded-Proto: https" -H "X-Auth-Request-Email: operator@image-test.example" "http://$NAME/s/account")
-check "forged X-Auth-Request-Email without the edge secret is anonymous" '[[ "$forged" == "302 "*/s/login ]]'
-forged=$(curl_in -o /dev/null -w '%{http_code} %{redirect_url}' -H "Host: $HOST" -H "X-Mpass-Edge-Secret: wrong" -H "X-Auth-Request-Email: operator@image-test.example" "http://$NAME/s/account")
-check "forged X-Auth-Request-Email with a wrong edge secret is anonymous" '[[ "$forged" == "302 "*/s/login ]]'
+# Edge secret: an admin-UI request without it (from inside the network) is refused (R2-5).
+forged=$(curl_in -o /dev/null -w '%{http_code}' -H "Host: $HOST" -H "X-Forwarded-Proto: https" -H "X-Auth-Request-Email: operator@image-test.example" "http://$NAME/s/account")
+check "admin UI without the edge secret: 403" '[ "$forged" = 403 ]'
+forged=$(curl_in -o /dev/null -w '%{http_code}' -H "Host: $HOST" -H "X-Mpass-Edge-Secret: wrong" -H "X-Auth-Request-Email: operator@image-test.example" "http://$NAME/s/account")
+check "admin UI with a wrong edge secret: 403" '[ "$forged" = 403 ]'
+
+# The edge secret is not in Apache's environment (phpinfo/env dumps), only in a www-data-readable file.
+check "MPASS_EDGE_SECRET not in Apache's environment" '! inside sh -c "tr \"\\0\" \"\\n\" < /proc/1/environ" | grep -q "^MPASS_EDGE_SECRET="'
+check "edge secret file is root:www-data 0440" '[ "$(inside stat -c "%U:%G %a" /run/mpass/edge-secret)" = "root:www-data 440" ]'
+sysinfo=$(curl_in "${edge[@]}" "http://$NAME/s/sysinfo")
+check "/s/sysinfo does not contain the edge secret" '! grep -q "$SECRET" <<<"$sysinfo"'
+check "/s/sysinfo renders no phpinfo() under SSO" '! grep -q "apache2handler" <<<"$sysinfo"'
+
+# Command mode (cron/worker containers): same image, volumes and SSO env, no install/warm-up.
+out=$(docker run --rm --network "$NET" -v "$NAME-config:/var/www/html/config" "${base_env[@]}" "${sso_env[@]}" "$IMAGE" php -r 'echo getenv("AUTH_TYPE"), ":", posix_getpwuid(posix_geteuid())["name"];' 2>&1)
+check "command mode runs the command as www-data with the SSO env" '[ "$out" = "SSO:www-data" ]'
+out=$(docker run --rm --network "$NET" "${base_env[@]}" "${sso_env[@]}" "$IMAGE" php -r 'echo 1;' 2>&1); rc=$?
+check "command mode refuses before the web container has installed" '[ $rc -ne 0 ] && grep -q "not installed yet" <<<"$out"'
 
 echo "== 5.23: restart without AUTH_TYPE (prod container compiled without the flag)"
 docker rm -f "$NAME" >/dev/null   # config/ (local.php) survives in the volume: no reinstall

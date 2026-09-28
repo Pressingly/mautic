@@ -53,7 +53,32 @@ ttl="${SESSION_TTL_SECONDS:-28800}"
 case "$ttl" in ''|*[!0-9]*) fail "SESSION_TTL_SECONDS must be a positive integer" ;; esac
 [ "$ttl" -gt 0 ] || fail "SESSION_TTL_SECONDS must be a positive integer (0 would mean no expiry)"
 
+# Command mode, for cron/worker containers: `mautic-entrypoint php bin/console mautic:campaigns:trigger`.
+# Same image, same volumes and the SAME SSO environment as the web container (AUTH_TYPE,
+# MPASS_EDGE_SECRET, SMB_CORPORATE_ID or MPASS_ALLOW_ANY_TENANT, ...), so the checks above ran and
+# e.g. the outbound guard is on for campaign webhooks fired by cron. No install, no warm-up: the web
+# container owns those; the command runs as www-data against the installed config/.
+if [ "$#" -gt 0 ] && [ "$1" != "apache2-foreground" ]; then
+    grep -qs "site_url" config/local.php || fail "not installed yet: start the web container first"
+    # setpriv, not su: su would parse the command's own options (php -r ...) as its own.
+    exec setpriv --reuid=www-data --regid=www-data --init-groups -- "$@"
+fi
+
 console() { su -s /bin/sh www-data -c "php bin/console $*"; }
+
+# Removes the admin_* keys seeded for the install (the throwaway admin password among them).
+strip_admin_keys() {
+    [ -f config/local.php ] || return 0
+    su -s /bin/sh www-data -c 'php -r '"'"'
+$file = "config/local.php";
+include $file;
+foreach (array_keys($parameters) as $key) {
+    if (str_starts_with($key, "admin_")) { unset($parameters[$key]); }
+}
+file_put_contents($file, "<?php\n\$parameters = ".var_export($parameters, true).";\n");
+chmod($file, 0600);
+'"'"''
+}
 
 # config/ may be an empty volume on first start.
 mkdir -p config var/cache var/logs media/files media/images
@@ -89,17 +114,13 @@ file_put_contents($file, "<?php\n\$parameters = ".var_export($parameters, true).
 chmod($file, 0600);
 '"'"''
     # The seeded db_driver alone does not count as installed (InstallService::checkIfInstalled needs
-    # site_url too), so the install runs.
-    console mautic:install "'$MAUTIC_SITE_URL'" --no-interaction --force
-    su -s /bin/sh www-data -c 'php -r '"'"'
-$file = "config/local.php";
-include $file;
-foreach (array_keys($parameters) as $key) {
-    if (str_starts_with($key, "admin_")) { unset($parameters[$key]); }
-}
-file_put_contents($file, "<?php\n\$parameters = ".var_export($parameters, true).";\n");
-chmod($file, 0600);
-'"'"''
+    # site_url too), so the install runs. The URL reaches the command through the environment, never
+    # through string interpolation into a shell command.
+    if ! su -s /bin/sh www-data -c 'php bin/console mautic:install "$MAUTIC_SITE_URL" --no-interaction --force'; then
+        strip_admin_keys
+        fail "mautic:install failed (the seeded admin keys were removed again)"
+    fi
+    strip_admin_keys
 fi
 grep -qs "site_url" config/local.php && grep -qs "db_driver" config/local.php \
     || fail "config/local.php lacks site_url/db_driver: /installer would stay reachable"
