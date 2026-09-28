@@ -12,8 +12,9 @@
 # Deployment env (MAUTIC_* names match Mautic's own config keys):
 #   MAUTIC_SITE_URL           required, e.g. https://mautic.${SMB_NAME}.${PLATFORM_DOMAIN}
 #   MAUTIC_DB_HOST, MAUTIC_DB_PORT (3306), MAUTIC_DB_NAME, MAUTIC_DB_USER, MAUTIC_DB_PASSWORD
-#   MAUTIC_ADMIN_EMAIL        required on first start only: the operator's mPass email. The admin's
-#                             password is random and discarded; the operator signs in through mPass.
+#   (No admin email: mautic:install needs an admin row, so it gets a placeholder,
+#   mautic-install@admin.invalid, with a random discarded password. .invalid is reserved, so no
+#   mPass identity can ever match it. Real admins are granted with /opt/mautic-users.php grant-admin.)
 #   TRUSTED_PROXIES           comma-separated, e.g. the Traefik network CIDR (required behind Traefik)
 #   TRUSTED_HOSTS             comma-separated regexes; default: the site_url host
 #   (Not MAUTIC_TRUSTED_*: ConfigEnvVars maps every Mautic config key K to an env override
@@ -89,14 +90,12 @@ chown -R www-data:www-data config var media/files media/images
 #    given (InstallCommand.php:199-208), so no secret appears on a command line (/proc/*/cmdline).
 #    The seeded admin_* keys are removed again afterwards.
 if ! grep -qs "site_url" config/local.php; then
-    : "${MAUTIC_ADMIN_EMAIL:?MAUTIC_ADMIN_EMAIL is required for the first start}"
     : "${MAUTIC_DB_HOST:?}" "${MAUTIC_DB_NAME:?}" "${MAUTIC_DB_USER:?}" "${MAUTIC_DB_PASSWORD:?}"
     su -s /bin/sh www-data -c 'php -r '"'"'
 $file = "config/local.php";
 $parameters = [];
 if (is_file($file)) { include $file; }
-$email = strtolower(trim((string) getenv("MAUTIC_ADMIN_EMAIL")));
-[$local, $domain] = array_pad(explode("@", $email, 2), 2, "mpass");
+$email = "mautic-install@admin.invalid";
 $parameters = array_merge($parameters, [
     "db_driver"       => "pdo_mysql",
     "db_host"         => (string) getenv("MAUTIC_DB_HOST"),
@@ -106,8 +105,8 @@ $parameters = array_merge($parameters, [
     "db_password"     => (string) getenv("MAUTIC_DB_PASSWORD"),
     "admin_email"     => $email,
     "admin_username"  => $email,
-    "admin_firstname" => $local,
-    "admin_lastname"  => $domain,
+    "admin_firstname" => "Install",
+    "admin_lastname"  => "Placeholder",
     "admin_password"  => bin2hex(random_bytes(24)),
 ]);
 file_put_contents($file, "<?php\n\$parameters = ".var_export($parameters, true).";\n");

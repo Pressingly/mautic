@@ -20,7 +20,7 @@ check() { if eval "$2"; then pass "$1"; else fail "$1"; fi; }
 curl_in() { docker run --rm --network "$NET" curlimages/curl:8.10.1 -s "$@"; }
 
 base_env=(-e MAUTIC_SITE_URL=$SITE -e MAUTIC_DB_HOST=$DB_HOST -e MAUTIC_DB_USER=$DB_USER
-          -e MAUTIC_DB_PASSWORD=$DB_PASS -e MAUTIC_DB_NAME=$DB_NAME -e MAUTIC_ADMIN_EMAIL=operator@image-test.example
+          -e MAUTIC_DB_PASSWORD=$DB_PASS -e MAUTIC_DB_NAME=$DB_NAME
           -e TRUSTED_PROXIES=172.16.0.0/12,192.168.0.0/16,10.0.0.0/8)
 sso_env=(-e AUTH_TYPE=SSO -e MPASS_EDGE_SECRET=$SECRET -e MPASS_ALLOW_ANY_TENANT=1 -e SESSION_TTL_SECONDS=3600)
 
@@ -50,6 +50,10 @@ refuses "SESSION_TTL_SECONDS=0" "SESSION_TTL_SECONDS" "${sso_env[@]}" -e SESSION
 echo "== first start, SSO on"
 start "${sso_env[@]}" || { echo "container did not start"; exit 1; }
 inside() { docker exec "$NAME" "$@"; }
+# No admin email under SSO: the install admin is an unusable placeholder, and admins come only
+# from the users script (baked into the image).
+check "install admin is the .invalid placeholder" 'inside su -s /bin/sh www-data -c "php /opt/mautic-users.php list" | grep -q "mautic-install@admin.invalid .*\[admin\]"'
+check "grant-admin via /opt/mautic-users.php" 'inside su -s /bin/sh www-data -c "php /opt/mautic-users.php grant-admin operator@image-test.example" | grep -q Administrator'
 
 check "code is root-owned (index.php)" '[ "$(inside stat -c %U /var/www/html/index.php)" = root ]'
 check "app/ is not writable by www-data" '! inside su -s /bin/sh www-data -c "test -w /var/www/html/app/config/security.php"'

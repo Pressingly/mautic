@@ -59,6 +59,8 @@ COPY --from=build /var/www/html /var/www/html
 RUN mkdir -p config var/cache var/logs var/tmp media/files media/images media/dashboards translations \
     && chown -R www-data:www-data config var media themes translations
 COPY --chmod=0755 docker/mpass/entrypoint.sh /usr/local/bin/mautic-entrypoint
+# User/role admin (member role, grant/revoke admin); mautic-bootstrap runs ensure-member-role.
+COPY --chmod=0644 docker/mpass/mautic-users.php /opt/mautic-users.php
 ENV APP_ENV=prod APP_DEBUG=0
 HEALTHCHECK --interval=15s --timeout=5s --start-period=120s \
     CMD php -r 'exit(@file_get_contents("http://127.0.0.1/robots.txt") === false ? 1 : 0);'
