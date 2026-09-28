@@ -133,4 +133,18 @@ console cache:warmup --env=prod --no-debug
 # 5. Apache's canonical scheme://host for its own redirects (apache-vhost.conf).
 MAUTIC_SERVER_NAME=$(php -r '$u = parse_url((string) getenv("MAUTIC_SITE_URL")); echo ($u["scheme"] ?? "https")."://".($u["host"] ?? "localhost").(isset($u["port"]) ? ":".$u["port"] : "");')
 export MAUTIC_SERVER_NAME
+
+# The edge secret reaches Apache as a file, not as an environment variable: under mod_php the
+# Apache environment is visible to phpinfo() and any environment dump. Root-owned, readable by
+# www-data only; ProxyIdentity reads MPASS_EDGE_SECRET_FILE.
+if [ -n "${MPASS_EDGE_SECRET:-}" ]; then
+    mkdir -p /run/mpass
+    umask 077
+    printf '%s' "$MPASS_EDGE_SECRET" > /run/mpass/edge-secret
+    chown root:www-data /run/mpass /run/mpass/edge-secret
+    chmod 0750 /run/mpass
+    chmod 0440 /run/mpass/edge-secret
+    export MPASS_EDGE_SECRET_FILE=/run/mpass/edge-secret
+    unset MPASS_EDGE_SECRET
+fi
 exec "$@"

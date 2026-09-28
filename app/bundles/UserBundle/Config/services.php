@@ -64,6 +64,7 @@ return function (ContainerConfigurator $configurator): void {
             '$defaultEmailDomain' => '%env(default::DEFAULT_EMAIL_DOMAIN)%',
             '$corporateId'        => '%env(default::SMB_CORPORATE_ID)%',
             '$edgeSecret'         => '%env(default::MPASS_EDGE_SECRET)%',
+            '$edgeSecretFile'     => '%env(default::MPASS_EDGE_SECRET_FILE)%',
         ]);
     $services->set(Mautic\UserBundle\Security\Mpass\MpassOutboundGuard::class);
     $services->set(Mautic\UserBundle\Security\Authenticator\MpassProxyAuthenticator::class)

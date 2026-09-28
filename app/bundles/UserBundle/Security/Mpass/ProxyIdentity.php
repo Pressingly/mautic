@@ -46,6 +46,7 @@ final class ProxyIdentity
         private readonly ?string $defaultEmailDomain,
         private readonly ?string $corporateId,
         private readonly ?string $edgeSecret = null,
+        private readonly ?string $edgeSecretFile = null,
     ) {
     }
 
@@ -70,15 +71,29 @@ final class ProxyIdentity
 
     /**
      * True only when the request came through the protected Traefik router: it carries the edge
-     * secret, compared in constant time. An unset or short MPASS_EDGE_SECRET trusts nothing (the
-     * image refuses to start under SSO without one).
+     * secret, compared in constant time. An unset or short secret trusts nothing (the image refuses
+     * to start under SSO without one).
+     *
+     * The image passes the secret as a FILE (MPASS_EDGE_SECRET_FILE) and removes MPASS_EDGE_SECRET
+     * from Apache's environment, so phpinfo()/environment dumps cannot show it. MPASS_EDGE_SECRET
+     * itself is still honoured for tests and a source-mounted devstack.
      */
     public function fromEdge(Request $request): bool
     {
-        $secret = (string) $this->edgeSecret;
+        $secret = $this->edgeSecret();
 
         return strlen($secret) >= 32
             && hash_equals($secret, (string) $request->headers->get(self::EDGE_SECRET_HEADER, ''));
+    }
+
+    private function edgeSecret(): string
+    {
+        $secret = trim((string) $this->edgeSecret);
+        if ('' === $secret && null !== $this->edgeSecretFile && '' !== $this->edgeSecretFile && is_readable($this->edgeSecretFile)) {
+            $secret = trim((string) file_get_contents($this->edgeSecretFile));
+        }
+
+        return $secret;
     }
 
     /**
