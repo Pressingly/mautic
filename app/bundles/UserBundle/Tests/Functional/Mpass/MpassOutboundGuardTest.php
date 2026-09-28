@@ -30,6 +30,63 @@ final class MpassOutboundGuardTest extends AbstractMpassTestCase
         yield 'ipv6 loopback' => ['http://[::1]/'];
         yield 'link-local metadata' => ['http://169.254.169.254/latest/meta-data/'];
         yield 'not a url' => ['not a url'];
+        // Round-2 review (R2-1): forms upstream's PrivateAddressChecker let through.
+        yield 'ipv4-mapped loopback' => ['http://[::ffff:127.0.0.1]/'];
+        yield 'ipv4-mapped docker bridge, hex form' => ['http://[::ffff:ac14:5]/'];
+        yield 'ipv4-compatible loopback' => ['http://[::127.0.0.1]/'];
+        yield '0.0.0.0' => ['http://0.0.0.0/'];
+        yield 'ipv6 unspecified' => ['http://[::]/'];
+        yield 'cgnat 100.64/10' => ['http://100.64.1.1/'];
+        yield 'documentation 192.0.2/24' => ['http://192.0.2.1/'];
+        yield 'benchmarking 198.18/15' => ['http://198.18.0.1/'];
+        yield 'multicast' => ['http://224.0.0.1/'];
+        yield 'broadcast' => ['http://255.255.255.255/'];
+        yield 'nat64 of loopback' => ['http://[64:ff9b::7f00:1]/'];
+        yield 'unique local' => ['http://[fd00::1]/'];
+        yield 'not http' => ['file:///etc/passwd'];
+        yield 'gopher' => ['gopher://127.0.0.1:6379/_x'];
+    }
+
+    public function testHostnameResolvingToAPrivateAddressIsRefused(): void
+    {
+        $this->expectException(PrivateAddressException::class);
+        $this->guard(['172.20.0.5'])->check('https://innocent.example.test/hook');
+    }
+
+    public function testAnyPrivateAnswerAmongPublicOnesIsRefused(): void
+    {
+        $this->expectException(PrivateAddressException::class);
+        $this->guard(['93.184.216.34', '::ffff:10.0.0.7'])->check('https://mixed.example.test/hook');
+    }
+
+    public function testUnresolvableHostIsRefused(): void
+    {
+        $this->expectException(PrivateAddressException::class);
+        $this->guard([])->check('https://nowhere.example.test/hook');
+    }
+
+    public function testConnectionIsPinnedToTheCheckedAddress(): void
+    {
+        self::assertSame(
+            [RequestOptions::ALLOW_REDIRECTS => false, 'curl' => [CURLOPT_RESOLVE => ['hooks.example.test:443:93.184.216.34']]],
+            $this->guard(['93.184.216.34'])->check('https://hooks.example.test/hook')
+        );
+        self::assertSame(
+            ['hooks.example.test:8080:[2606:2800:220:1:248:1893:25c8:1946]'],
+            $this->guard(['2606:2800:220:1:248:1893:25c8:1946'])->check('http://hooks.example.test:8080/')['curl'][CURLOPT_RESOLVE]
+        );
+    }
+
+    /**
+     * @param array<int, string> $answers what DNS returns for any host
+     */
+    private function guard(array $answers): MpassOutboundGuard
+    {
+        return new MpassOutboundGuard(
+            static::getContainer()->get(\Mautic\UserBundle\Security\Mpass\ProxyIdentity::class),
+            static::getContainer()->get(\Mautic\CoreBundle\Helper\CoreParametersHelper::class),
+            static fn (string $host): array => $answers,
+        );
     }
 
     #[DataProvider('privateUrls')]
