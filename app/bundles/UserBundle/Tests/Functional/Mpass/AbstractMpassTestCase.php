@@ -21,7 +21,7 @@ abstract class AbstractMpassTestCase extends MauticMysqlTestCase
 {
     protected $useCleanupRollback = false;
 
-    private const ENV = ['AUTH_TYPE', 'MPASS_SSO_DEFAULT_ROLE', 'DEFAULT_EMAIL_DOMAIN', 'SMB_CORPORATE_ID', 'MPASS_PORTAL_URL', 'MPASS_EDGE_SECRET', 'MPASS_EDGE_SECRET_FILE', 'MPASS_ALLOW_ANY_TENANT'];
+    private const ENV = ['AUTH_TYPE', 'MPASS_SSO_DEFAULT_ROLE', 'DEFAULT_EMAIL_DOMAIN', 'SMB_CORPORATE_ID', 'LOGOUT_REDIRECT_URL', 'MPASS_EDGE_SECRET', 'MPASS_EDGE_SECRET_FILE', 'MPASS_ALLOW_ANY_TENANT'];
 
     /** What the protected Traefik router injects; tests send it wherever the edge would. */
     protected const EDGE_SECRET = 'test-edge-secret-0123456789abcdef0123456789';

@@ -2,7 +2,7 @@
 #
 # Mautic behind the FOSS bundle's mPass SSO (oauth2-proxy + Traefik ForwardAuth).
 # Build pattern B (prod): code, vendor and compiled assets are baked; no source mount.
-# See sso-rules-moneta openspec/changes/add-mautic-to-sso/design.md §6.
+# See doc/mpass_sso.md §Operations.
 #
 # The Symfony container is NOT warmed at build time: app/config/config.php fixes the session
 # cookie's `secure` flag from site_url when the container compiles, and site_url only exists at
@@ -59,7 +59,7 @@ COPY --from=build /var/www/html /var/www/html
 RUN mkdir -p config var/cache var/logs var/tmp media/files media/images media/dashboards translations \
     && chown -R www-data:www-data config var media themes translations
 COPY --chmod=0755 docker/mpass/entrypoint.sh /usr/local/bin/mautic-entrypoint
-# User/role admin (member role, grant/revoke admin); mautic-bootstrap runs ensure-member-role.
+# User/role admin (member role, grant/revoke admin); the entrypoint runs ensure-member-role under SSO.
 COPY --chmod=0644 docker/mpass/mautic-users.php /opt/mautic-users.php
 ENV APP_ENV=prod APP_DEBUG=0
 HEALTHCHECK --interval=15s --timeout=5s --start-period=120s \

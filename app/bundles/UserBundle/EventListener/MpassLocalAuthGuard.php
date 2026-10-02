@@ -37,9 +37,6 @@ final class MpassLocalAuthGuard implements EventSubscriberInterface
     /** Same pattern as the `main` firewall in app/config/security.php. */
     public const MAIN_FIREWALL_PATH = '#^/(s/|elfinder|efconnect)#';
 
-    /** `main` plus the API firewalls (`api`, `v2api`): where a bearer/basic credential is read. */
-    private const CREDENTIAL_PATH = '#^/(s/|elfinder|efconnect|api(/|$))#';
-
     /** Routes that set a local password, create a user outside mPass, or issue a session → 404. */
     public const GATED_ROUTES = [
         'mautic_user_logincheck',
@@ -49,8 +46,8 @@ final class MpassLocalAuthGuard implements EventSubscriberInterface
         'mautic_saml_login_retry',
         'mautic_sso_login',
         'mautic_sso_login_check',
-        'fos_oauth_server_authorize',
-        'fos_oauth_server_token',
+        // The OAuth2 authorize flow's password form. /oauth/v2/token and /oauth/v2/authorize stay
+        // open for API clients (the `api` firewall); clients allow no password grant.
         'mautic_oauth2_server_auth_login',
         'mautic_oauth2_server_auth_login_check',
     ];
@@ -172,21 +169,21 @@ final class MpassLocalAuthGuard implements EventSubscriberInterface
             return new Response('', Response::HTTP_NOT_FOUND); // G3, G4
         }
 
-        // G11: no bearer/basic credential on the admin UI or the API, in the header or as the
-        // `access_token` parameter FOSOAuthServer also reads. The API is off (api_enabled=false),
-        // but nothing may depend on that alone: an OAuth2/basic login would be a second way in,
-        // and every failed one would count against the login throttle of the whole address.
-        if (preg_match(self::CREDENTIAL_PATH, self::path($request))
+        // G11: no bearer/basic credential on the admin UI (`main` firewall), in the header or as the
+        // `access_token` parameter FOSOAuthServer also reads: an OAuth2/basic login there would be a
+        // second way into the UI, and every failed one would count against the login throttle of
+        // the whole address. /api/* is left to Mautic's own `api` firewall, so API keys and OAuth
+        // clients keep working under SSO (api_enabled stays an admin setting).
+        if (preg_match(self::MAIN_FIREWALL_PATH, self::path($request))
             && ($request->headers->has('Authorization')
                 || $request->query->has('access_token')
                 || $request->request->has('access_token'))) {
             return new Response('', Response::HTTP_UNAUTHORIZED);
         }
 
-        // Round-2 review R2-5: every request to the admin UI that came through the protected
-        // router carries the edge secret. One that does not came from inside the network (another
-        // container, Mautic's own outbound HTTP) and is refused outright, instead of being served
-        // as an anonymous or session-authenticated request. Bypass paths are not affected.
+        // Round-2 review R2-5, when an edge secret is configured: every request to the admin UI that
+        // came through the protected router carries it. One that does not came from inside the
+        // network and is refused outright. Without a configured secret fromEdge() is always true.
         if (preg_match(self::MAIN_FIREWALL_PATH, self::path($request)) && !$this->identity->fromEdge($request)) {
             $this->logger?->warning('mPass SSO: admin-UI request without a valid edge secret refused', [
                 'path'                => self::path($request),
@@ -197,11 +194,17 @@ final class MpassLocalAuthGuard implements EventSubscriberInterface
             return new Response('', Response::HTTP_FORBIDDEN);
         }
 
-        // G5: per-app Logout is navigation-only; nothing is cleared.
+        // G5: per-app Logout is navigation-only; nothing is cleared. A missing or non-http(s)
+        // LOGOUT_REDIRECT_URL is logged, and the static page is shown instead of a redirect.
         if ('mautic_user_logout' === $route) {
-            return $this->portalUrl
-                ? new RedirectResponse($this->portalUrl)
-                : $this->mpassPage('logout');
+            $portal = ProxyIdentity::portalUrl($this->portalUrl);
+            if (null === $portal) {
+                $this->logger?->error('mPass SSO: LOGOUT_REDIRECT_URL is missing or not an absolute http(s) URL; Logout does not redirect');
+
+                return $this->mpassPage('logout');
+            }
+
+            return new RedirectResponse($portal);
         }
 
         // G5: no password form under SSO; the static page never redirects, so no loop.

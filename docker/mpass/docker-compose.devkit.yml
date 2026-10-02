@@ -1,36 +1,33 @@
 # =============================================================================
 # Mautic behind the mPass SSO devkit (local testing only)
 # =============================================================================
-# Runs this fork against a running mpass-sso-devkit
-# (github.com/Pressingly/mpass-sso-devkit), which provides Traefik, the shared
-# `mpass-auth` ForwardAuth, the mPass login bridge and the frontend/backend
-# networks. Production wiring lives in the platform bundle, not here.
-# Contract: sso-rules-moneta openspec/changes/add-mautic-to-sso.
+# An extra compose file for github.com/Pressingly/mpass-sso-devkit, run INSIDE the
+# devkit's compose project (the devkit's Traefik only routes that project). From the
+# devkit checkout, with this fork cloned next to it as ../mautic:
 #
-#   1. Start the devkit (docker compose up -d in mpass-sso-devkit).
-#   2. cp docker/mpass/devkit.env.example docker/mpass/.env and fill it in.
-#   3. docker compose -f docker/mpass/docker-compose.devkit.yml up -d --build
+#   1. Append docker/mpass/devkit.env.example to the devkit's .env and fill it in.
+#   2. docker compose -f docker-compose.yml -f ../mautic/docker/mpass/docker-compose.devkit.yml up -d --build
+#
+# Relative paths below resolve against the devkit directory (the first -f file), so
+# the build context is ../mautic. The networks are the devkit's own.
 #
 # Host: https://mautic.${PLATFORM_DOMAIN} (mautic.foss.local.dev). Add it to
 # /etc/hosts next to the devkit's own names.
 #
-# First start: mautic installs itself (CLI, placeholder admin nobody can log in as), then
-# mautic-bootstrap creates the "mPass Member" role (regular member: marketer
-# permissions) and prints its id. MPASS_SSO_DEFAULT_ROLE must hold that id; until
-# it does, first-time SSO users get Mautic's "no default role" refusal page.
+# First start: Mautic installs itself (CLI, placeholder admin nobody can log in as) and
+# creates the "mPass Member" default role (regular member: marketer permissions).
 #
-# Edge secret: the protected router sets X-Mpass-Edge-Secret=MPASS_EDGE_SECRET
-# (overwriting any client-sent value); every bypass router strips a client-sent
-# copy. Mautic refuses the admin UI (403) without it.
-#
-# Users and roles (no one has a password under SSO):
-#   docker compose -f docker/mpass/docker-compose.devkit.yml exec -u www-data mautic \
-#     php /opt/mautic-users.php <list | member-perms <marketer|contributor|viewer|none>
-#                               | grant-admin <email>... | revoke-admin <email>...>
+# Users and roles (no one has a password under SSO), from the devkit directory:
+#   docker compose -f docker-compose.yml -f ../mautic/docker/mpass/docker-compose.devkit.yml \
+#     exec -u www-data mautic php /opt/mautic-users.php \
+#     <list | member-perms <marketer|contributor|viewer|none> | grant-admin <email>... | revoke-admin <email>...>
 # grant-admin works before the person's first login; it is the only way to get admin.
+#
+# Routing (doc/mpass_sso.md §"ForwardAuth bypass list"): only the admin UI and the
+# installer are behind mpass-auth; everything else is Mautic's public surface (landing
+# pages, tracking, forms, email links, callbacks, /api, /oauth/v2). Every router strips
+# client identity headers, so a public route is always anonymous.
 # =============================================================================
-
-name: mautic-devkit
 
 services:
 
@@ -41,8 +38,8 @@ services:
     environment:
       MARIADB_DATABASE: mautic
       MARIADB_USER: mautic
-      MARIADB_PASSWORD: ${MAUTIC_DB_PASSWORD:?set MAUTIC_DB_PASSWORD in docker/mpass/.env}
-      MARIADB_ROOT_PASSWORD: ${MAUTIC_DB_ROOT_PASSWORD:?set MAUTIC_DB_ROOT_PASSWORD in docker/mpass/.env}
+      MARIADB_PASSWORD: ${MAUTIC_DB_PASSWORD:?set MAUTIC_DB_PASSWORD in the devkit .env}
+      MARIADB_ROOT_PASSWORD: ${MAUTIC_DB_ROOT_PASSWORD:?set MAUTIC_DB_ROOT_PASSWORD in the devkit .env}
     volumes:
       - mautic-db-data:/var/lib/mysql
     networks:
@@ -56,7 +53,7 @@ services:
 
   mautic:
     build:
-      context: ../..
+      context: ../mautic
     image: mautic-mpass:devkit
     restart: unless-stopped
     # NEVER add `ports:` (audit row 2): a published port is a way in that
@@ -67,16 +64,18 @@ services:
     environment:
       # Read by the fork at runtime (never written to a Mautic config file).
       AUTH_TYPE: SSO
-      MPASS_EDGE_SECRET: ${MPASS_EDGE_SECRET:?set MPASS_EDGE_SECRET in docker/mpass/.env (openssl rand -hex 32)}
-      DEFAULT_EMAIL_DOMAIN: ${DEFAULT_EMAIL_DOMAIN:-}
+      DEFAULT_EMAIL_DOMAIN: ${DEFAULT_EMAIL_DOMAIN:-askii.ai}
       SMB_CORPORATE_ID: ${SMB_CORPORATE_ID:-}
       # Dev only: this kit leaves SMB_CORPORATE_ID empty, which admits every
       # principal in the Cognito pool. The image refuses that under SSO unless
       # it is said out loud here. Drop this line when SMB_CORPORATE_ID is set.
       MPASS_ALLOW_ANY_TENANT: "1"
-      MPASS_PORTAL_URL: https://${PLATFORM_DOMAIN}
-      MPASS_SSO_DEFAULT_ROLE: ${MPASS_SSO_DEFAULT_ROLE:-}
-      SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-432000}
+      LOGOUT_REDIRECT_URL: https://${PLATFORM_DOMAIN}
+      SESSION_COOKIE_MAX_AGE_SECONDS: ${SESSION_COOKIE_MAX_AGE_SECONDS:-432000}
+      # Optional. Empty: header trust is topology-based, like the other apps.
+      # Set (>= 32 chars): Mautic trusts identity headers only with it, and the
+      # protected router below injects it.
+      MPASS_EDGE_SECRET: ${MPASS_EDGE_SECRET:-}
       # Read by docker/mpass/entrypoint.sh (install + config/parameters_local.php).
       MAUTIC_SITE_URL: https://mautic.${PLATFORM_DOMAIN}
       MAUTIC_DB_HOST: mautic-db
@@ -95,83 +94,29 @@ services:
       - backend
     labels:
       - traefik.enable=true
-      # Opt-in for the devkit's Traefik, which otherwise routes only its own project.
-      - mpass-sso-devkit.app=true
       - traefik.http.services.mautic.loadbalancer.server.port=80
 
-      # Middlewares used only by Mautic's routers.
-      - traefik.http.middlewares.mautic-edge-secret.headers.customrequestheaders.X-Mpass-Edge-Secret=${MPASS_EDGE_SECRET}
+      # Edge secret: set on the protected router (overwriting any client value),
+      # removed on the public one. With MPASS_EDGE_SECRET empty, both remove it.
+      - traefik.http.middlewares.mautic-edge-secret.headers.customrequestheaders.X-Mpass-Edge-Secret=${MPASS_EDGE_SECRET:-}
       - traefik.http.middlewares.mautic-strip-edge-secret.headers.customrequestheaders.X-Mpass-Edge-Secret=
 
-      # Protected router: everything not bypassed below (admin UI /s/*,
-      # landing pages, /api, /oauth, /installer, previews, callbacks...).
-      - traefik.http.routers.mautic-secure.rule=Host(`mautic.${PLATFORM_DOMAIN}`)
+      # Protected: the admin UI (the `main` firewall: /s/, elfinder, efconnect) and
+      # the installer, also through the /index.php/ front controller. Strip client
+      # identity headers, authenticate, then add the edge secret.
+      - traefik.http.routers.mautic-secure.rule=Host(`mautic.${PLATFORM_DOMAIN}`) && PathRegexp(`^(/index\.php)?/(s(/|$$)|elfinder|efconnect|installer)`)
       - traefik.http.routers.mautic-secure.entrypoints=websecure
       - traefik.http.routers.mautic-secure.service=mautic
-      - traefik.http.routers.mautic-secure.priority=10
-      # Strip client identity headers, authenticate, then add the edge secret.
+      - traefik.http.routers.mautic-secure.priority=20
       - traefik.http.routers.mautic-secure.middlewares=strip-auth-headers@docker,security-headers@docker,mpass-auth@docker,mautic-edge-secret@docker
 
-      # Public marketing surface (tasks §2.5): exact paths, method-limited, no
-      # mpass-auth. Email recipients and website visitors never hold a session.
-      - traefik.http.routers.mautic-public-read.rule=Host(`mautic.${PLATFORM_DOMAIN}`) && (Method(`GET`) || Method(`HEAD`)) && PathRegexp(`^/(mtc\.js|mautic-essential\.js|mautic-tracking\.js|mtracking\.gif|(r|redirect)/[^/]+|email/[^/]+\.gif|email/view/[^/]+|email/unsubscribe/[^/]+(/[^/]+){0,2}|asset/[^/]+|form/generate\.js|form/message|form/[0-9]+|form/embed/[0-9]+|index\.php/form/[0-9]+|media/(js|css|images)/.+|themes/[^/]+/assets/.+|app/assets/.+|favicon\.ico|robots\.txt)$$`)
-      - traefik.http.routers.mautic-public-read.entrypoints=websecure
-      - traefik.http.routers.mautic-public-read.service=mautic
-      - traefik.http.routers.mautic-public-read.priority=20
-      - traefik.http.routers.mautic-public-read.middlewares=strip-auth-headers@docker,mautic-strip-edge-secret@docker,security-headers@docker
-      # Unsubscribe-all and resubscribe links (GET only).
-      - traefik.http.routers.mautic-public-dnc.rule=Host(`mautic.${PLATFORM_DOMAIN}`) && Method(`GET`) && PathRegexp(`^/email/(dnc/[^/]+(/[^/]+){0,2}|resubscribe/[^/]+)$$`)
-      - traefik.http.routers.mautic-public-dnc.entrypoints=websecure
-      - traefik.http.routers.mautic-public-dnc.service=mautic
-      - traefik.http.routers.mautic-public-dnc.priority=20
-      - traefik.http.routers.mautic-public-dnc.middlewares=strip-auth-headers@docker,mautic-strip-edge-secret@docker,security-headers@docker
-      # Tracked contact id.
-      - traefik.http.routers.mautic-public-mtc.rule=Host(`mautic.${PLATFORM_DOMAIN}`) && (Method(`GET`) || Method(`OPTIONS`)) && Path(`/mtc`)
-      - traefik.http.routers.mautic-public-mtc.entrypoints=websecure
-      - traefik.http.routers.mautic-public-mtc.service=mautic
-      - traefik.http.routers.mautic-public-mtc.priority=20
-      - traefik.http.routers.mautic-public-mtc.middlewares=strip-auth-headers@docker,mautic-strip-edge-secret@docker,security-headers@docker
-      # Tracking events and public form posts.
-      - traefik.http.routers.mautic-public-write.rule=Host(`mautic.${PLATFORM_DOMAIN}`) && (Method(`POST`) || Method(`OPTIONS`)) && PathRegexp(`^/(mtc/event|form/submit|form/submit/ajax)$$`)
-      - traefik.http.routers.mautic-public-write.entrypoints=websecure
-      - traefik.http.routers.mautic-public-write.service=mautic
-      - traefik.http.routers.mautic-public-write.priority=20
-      - traefik.http.routers.mautic-public-write.middlewares=strip-auth-headers@docker,mautic-strip-edge-secret@docker,security-headers@docker
-      # RFC 8058 one-click unsubscribe.
-      - traefik.http.routers.mautic-public-unsubscribe.rule=Host(`mautic.${PLATFORM_DOMAIN}`) && Method(`POST`) && PathRegexp(`^/email/unsubscribe/[^/]+(/[^/]+){0,2}$$`)
-      - traefik.http.routers.mautic-public-unsubscribe.entrypoints=websecure
-      - traefik.http.routers.mautic-public-unsubscribe.service=mautic
-      - traefik.http.routers.mautic-public-unsubscribe.priority=20
-      - traefik.http.routers.mautic-public-unsubscribe.middlewares=strip-auth-headers@docker,mautic-strip-edge-secret@docker,security-headers@docker
-
-  # One-shot: creates the SSO default role "mPass Member" with the regular-member
-  # (marketer) permission set once Mautic has installed, and prints the id that
-  # MPASS_SSO_DEFAULT_ROLE must hold. Uses Mautic's own models via
-  # /opt/mautic-users.php (baked into the Mautic image). Idempotent: an existing role is left as is.
-  # Rerun: docker compose run --rm mautic-bootstrap
-  mautic-bootstrap:
-    image: mautic-mpass:devkit
-    restart: "no"
-    depends_on:
-      mautic:
-        condition: service_healthy
-    user: www-data
-    entrypoint: ["php", "/opt/mautic-users.php", "ensure-member-role"]
-    command: []
-    environment:
-      MPASS_SSO_DEFAULT_ROLE: ${MPASS_SSO_DEFAULT_ROLE:-}
-    volumes:
-      - mautic-config:/var/www/html/config:ro
-    networks:
-      - backend
-
-networks:
-  frontend:
-    name: ${SMB_NAME:-foss}-frontend
-    external: true
-  backend:
-    name: ${SMB_NAME:-foss}-backend
-    external: true
+      # Public: everything else. Landing pages are a catch-all slug, so this is a
+      # catch-all rather than an allow-list. Anonymous by construction.
+      - traefik.http.routers.mautic-public.rule=Host(`mautic.${PLATFORM_DOMAIN}`)
+      - traefik.http.routers.mautic-public.entrypoints=websecure
+      - traefik.http.routers.mautic-public.service=mautic
+      - traefik.http.routers.mautic-public.priority=10
+      - traefik.http.routers.mautic-public.middlewares=strip-auth-headers@docker,mautic-strip-edge-secret@docker,security-headers@docker
 
 volumes:
   mautic-db-data:

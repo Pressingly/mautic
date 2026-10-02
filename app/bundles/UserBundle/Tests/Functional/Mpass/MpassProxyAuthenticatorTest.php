@@ -202,7 +202,7 @@ final class MpassProxyAuthenticatorTest extends AbstractMpassTestCase
     {
         $count = $this->userCount();
         $cases = [
-            'unset'       => '',
+            'unset, and no "mPass Member" role' => '',
             'missing'     => '999999',
             'admin'       => (string) $this->adminRole->getId(),
             'unpublished' => (string) $this->createRole('mPass unpublished', false, false)->getId(),
@@ -214,6 +214,25 @@ final class MpassProxyAuthenticatorTest extends AbstractMpassTestCase
             $this->assertRefused('role', $this->get('/s/account', "role-{$case}@example.com"), $case);
             self::assertSame($count, $this->userCount(), $case);
         }
+    }
+
+    /**
+     * Bundle-contract review: with MPASS_SSO_DEFAULT_ROLE unset, the role named "mPass Member" (the
+     * one the image creates at boot) is the default, so first boot needs no id copied into env. It
+     * must still be a published, non-admin role.
+     */
+    public function testUnsetDefaultRoleFallsBackToTheMemberRoleByName(): void
+    {
+        $member = $this->createRole(MpassProxyAuthenticator::MEMBER_ROLE, false);
+        $this->restartWithEnv('MPASS_SSO_DEFAULT_ROLE', null);
+
+        $this->assertServedAs('newcomer@example.com', $this->get('/s/account', 'newcomer@example.com'));
+        self::assertSame($member->getId(), $this->findUser('newcomer@example.com')->getRole()->getId());
+
+        $this->em->find(Role::class, $member->getId())->setIsAdmin(true);
+        $this->em->flush();
+        $this->client->getCookieJar()->clear();
+        $this->assertRefused('role', $this->get('/s/account', 'second@example.com'), 'an admin "mPass Member" is refused');
     }
 
     public function testExistingUserIsNeverReRoled(): void
@@ -404,11 +423,20 @@ final class MpassProxyAuthenticatorTest extends AbstractMpassTestCase
         self::assertSame($count, $this->userCount());
     }
 
-    public function testUnsetOrShortEdgeSecretTrustsNothing(): void
+    /**
+     * Bundle-contract review: the edge secret is opt-in. Unset, header trust is topology-based like
+     * every other bundle app: the identity is honoured without any X-Mpass-Edge-Secret.
+     */
+    public function testUnsetEdgeSecretMeansTopologyTrust(): void
     {
         $this->restartWithEnv('MPASS_EDGE_SECRET', null);
-        self::assertSame(403, $this->get('/s/account', 'forged@example.com', ['HTTP_X_MPASS_EDGE_SECRET' => ''])->getStatusCode());
+        $this->createUser('alice@example.com');
 
+        $this->assertServedAs('alice@example.com', $this->get('/s/account', 'alice@example.com', ['HTTP_X_MPASS_EDGE_SECRET' => '']));
+    }
+
+    public function testShortEdgeSecretTrustsNothing(): void
+    {
         $this->restartWithEnv('MPASS_EDGE_SECRET', 'short');
         self::assertSame(403, $this->get('/s/account', 'forged@example.com', ['HTTP_X_MPASS_EDGE_SECRET' => 'short'])->getStatusCode());
         self::assertNull($this->findUser('forged@example.com'));

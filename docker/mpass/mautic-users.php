@@ -111,7 +111,7 @@ switch ($cmd) {
         }
         break;
 
-    // Used by the mautic-bootstrap service. Creates the SSO default role with the
+    // Run by the entrypoint at every SSO boot. Creates the SSO default role with the
     // regular-member (marketer) set on first run only; later runs never touch
     // permissions an admin may have changed in the UI.
     case 'ensure-member-role':
@@ -127,8 +127,10 @@ switch ($cmd) {
             echo "created role '".MEMBER_ROLE."' with the 'marketer' permission set\n";
         }
         echo MEMBER_ROLE." role id: {$role->getId()}\n";
-        if (getenv('MPASS_SSO_DEFAULT_ROLE') !== (string) $role->getId()) {
-            fwrite(STDERR, "Set MPASS_SSO_DEFAULT_ROLE={$role->getId()} in .env, then: docker compose up -d mautic\n");
+        // Unset MPASS_SSO_DEFAULT_ROLE means this role, by name; only a set, different id is a problem.
+        $id = (string) getenv('MPASS_SSO_DEFAULT_ROLE');
+        if ('' !== $id && $id !== (string) $role->getId()) {
+            fwrite(STDERR, "MPASS_SSO_DEFAULT_ROLE=$id names another role; unset it to use '".MEMBER_ROLE."'\n");
         }
         break;
 

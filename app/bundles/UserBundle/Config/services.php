@@ -73,7 +73,7 @@ return function (ContainerConfigurator $configurator): void {
         ->arg('$logger', service('monolog.logger.mautic'));
     $services->set(Mautic\UserBundle\EventListener\MpassLocalAuthGuard::class)
         ->args([
-            '$portalUrl'        => '%env(default::MPASS_PORTAL_URL)%',
+            '$portalUrl'        => '%env(default::LOGOUT_REDIRECT_URL)%',
             '$sessionFactory'   => service('session.factory'),
             '$rememberMePath'   => '%mautic.rememberme_path%',
             '$rememberMeDomain' => '%mautic.rememberme_domain%',
@@ -81,7 +81,7 @@ return function (ContainerConfigurator $configurator): void {
         ]);
     $services->set(Mautic\UserBundle\Twig\MpassExtension::class)
         ->args([
-            '$portalUrl' => '%env(default::MPASS_PORTAL_URL)%',
+            '$portalUrl' => '%env(default::LOGOUT_REDIRECT_URL)%',
         ]);
 
     $services->set(Mautic\UserBundle\Security\SAML\Helper::class);

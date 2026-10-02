@@ -14,15 +14,16 @@ use Symfony\Component\HttpFoundation\Request;
  *  2. every Mautic router runs strip-auth-headers before mpass-auth, so a client cannot inject
  *     X-Auth-Request-*;
  *  3. oauth2-proxy validates the upstream session and injects the headers on every request;
- *  4. the protected router adds X-Mpass-Edge-Secret = MPASS_EDGE_SECRET, and every Mautic router
- *     strips a client-sent copy. Link 1 only holds for the outside world: other containers on the
- *     same networks, and Mautic's own outbound HTTP (campaign webhooks, form repost), can reach
- *     Apache directly with any headers. So the identity headers are trusted only on a request that
- *     carries the edge secret; without it they are treated as absent.
+ *  4. OPTIONAL, when MPASS_EDGE_SECRET (or _FILE) is set: the protected router adds
+ *     X-Mpass-Edge-Secret, and every Mautic router strips a client-sent copy. Link 1 only holds for
+ *     the outside world: other containers on the same networks can reach Apache directly with any
+ *     headers. With the secret set, identity headers are trusted only on a request that carries it.
+ *     Unset, trust is topology-based like every other bundle app (the platform contract); Mautic's
+ *     own outbound HTTP is still kept off internal addresses by MpassOutboundGuard.
  *
  * All settings come from the process env (or a dotenv file) via %env(default::…)%, resolved when
  * the service is built for a request, never from a Mautic config key and never at container compile
- * time. See sso-rules-moneta openspec/changes/add-mautic-to-sso/design.md §2.
+ * time. See doc/mpass_sso.md.
  *
  * AUTH_TYPE is also a CGI meta-variable (RFC 3875 §4.1.1). Symfony's %env()% reads $_ENV, then
  * $_SERVER, then getenv(), and app/config/bootstrap.php does `$_SERVER += $_ENV`, so a web server
@@ -71,9 +72,10 @@ final class ProxyIdentity
     }
 
     /**
-     * True only when the request came through the protected Traefik router: it carries the edge
-     * secret, compared in constant time. An unset or short secret trusts nothing (the image refuses
-     * to start under SSO without one).
+     * Whether the request came through the protected Traefik router. With no edge secret configured
+     * that is assumed (topology trust). With one configured, the request must carry it, compared in
+     * constant time; a configured secret shorter than 32 characters trusts nothing (the image
+     * refuses to start with one).
      *
      * The image passes the secret as a FILE (MPASS_EDGE_SECRET_FILE) and removes MPASS_EDGE_SECRET
      * from Apache's environment, so phpinfo()/environment dumps cannot show it. MPASS_EDGE_SECRET
@@ -82,9 +84,24 @@ final class ProxyIdentity
     public function fromEdge(Request $request): bool
     {
         $secret = $this->edgeSecret();
+        if ('' === $secret) {
+            return true;
+        }
 
         return strlen($secret) >= 32
             && hash_equals($secret, (string) $request->headers->get(self::EDGE_SECRET_HEADER, ''));
+    }
+
+    /**
+     * LOGOUT_REDIRECT_URL when it is an absolute http(s) URL, else null: the caller logs and leaves
+     * the link alone rather than redirecting to a relative or script URL.
+     */
+    public static function portalUrl(?string $value): ?string
+    {
+        $value  = trim((string) $value);
+        $scheme = strtolower((string) parse_url($value, PHP_URL_SCHEME));
+
+        return in_array($scheme, ['http', 'https'], true) && '' !== (string) parse_url($value, PHP_URL_HOST) ? $value : null;
     }
 
     private function edgeSecret(): string
@@ -138,7 +155,8 @@ final class ProxyIdentity
      *
      * Fails closed: with SMB_CORPORATE_ID unset, every principal in the Cognito pool would be
      * admitted, so that is allowed only when the deployment says so with MPASS_ALLOW_ANY_TENANT=1
-     * (the same opt-in the image's entrypoint requires).
+     * (the same opt-in the image's entrypoint requires). Stricter than the contract, which skips the
+     * check when SMB_CORPORATE_ID is unset; recorded as a trade-off in doc/mpass_sso.md.
      */
     public function corporateOk(Request $request): bool
     {

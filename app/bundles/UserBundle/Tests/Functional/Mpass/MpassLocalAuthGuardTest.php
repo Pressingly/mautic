@@ -34,13 +34,11 @@ final class MpassLocalAuthGuardTest extends AbstractMpassTestCase
         ['GET', '/saml/login_retry'],
         ['GET', '/s/sso_login/Foo'],
         ['GET', '/s/sso_login_check/Foo'],
-        ['GET', '/oauth/v2/authorize'],
         ['GET', '/oauth/v2/authorize_login'],
         ['POST', '/oauth/v2/authorize_login_check'],
         ['POST', '/s/users/invite'],
         ['POST', '/s/users/INVITE'], // PHP method names are case-insensitive
         ['POST', '/api/users/new'],
-        ['POST', '/oauth/v2/token'], // OAuth2 token minting (review finding 3)
     ];
 
     /**
@@ -49,10 +47,14 @@ final class MpassLocalAuthGuardTest extends AbstractMpassTestCase
      */
     private const ALLOWED = [
         'login'               => 'guard: redirects to the dashboard or renders the static mPass page',
-        'mautic_user_logout'  => 'guard: 302 to MPASS_PORTAL_URL, clears nothing',
+        'mautic_user_logout'  => 'guard: 302 to LOGOUT_REDIRECT_URL, clears nothing',
         'mautic_user_account' => 'ProfileController drops plainPassword and email under SSO',
         'mautic_user_action'  => 'new/edit drop plainPassword (and email on edit) under SSO; invite is gated',
         'mautic_user_index'   => 'list only; the invite button is hidden under SSO',
+        // Bundle-contract review: API keys and OAuth clients keep working under SSO. Clients allow
+        // no password grant, and the authorize flow's password form stays gated.
+        'fos_oauth_server_token'     => 'the `api` firewall; client_credentials/auth-code/refresh only',
+        'fos_oauth_server_authorize' => 'needs a login through mautic_oauth2_server_auth_login, which is gated',
     ];
 
     public function testLocalCredentialEndpoints404UnderSso(): void
@@ -147,16 +149,30 @@ final class MpassLocalAuthGuardTest extends AbstractMpassTestCase
 
     // --- review findings 3 and 4 --------------------------------------------------------------
 
-    public function testOauthAccessTokenParameterIsRefusedUnderSso(): void
+    public function testOauthAccessTokenParameterIsRefusedOnTheAdminUiUnderSso(): void
     {
         self::assertSame(Response::HTTP_UNAUTHORIZED, $this->get('/s/account?access_token=x', null)->getStatusCode(), 'query');
         $this->client->request('POST', '/s/account', ['access_token' => 'x']);
         self::assertSame(Response::HTTP_UNAUTHORIZED, $this->client->getResponse()->getStatusCode(), 'body');
-        self::assertSame(Response::HTTP_UNAUTHORIZED, $this->get('/api/contacts?access_token=x', null)->getStatusCode(), 'API query');
-        self::assertSame(Response::HTTP_UNAUTHORIZED, $this->get('/api/contacts', null, ['HTTP_AUTHORIZATION' => 'Bearer x'])->getStatusCode(), 'API bearer');
-        self::assertSame(Response::HTTP_UNAUTHORIZED, $this->get('/api/v2/docs.json', null, ['PHP_AUTH_USER' => 'admin', 'PHP_AUTH_PW' => 'Maut1cR0cks!'])->getStatusCode(), 'API v2 basic');
         // (API v2 user routes answer 404 before any credential check: they are gated routes.)
         self::assertSame(Response::HTTP_NOT_FOUND, $this->get('/api/v2/users', null, ['PHP_AUTH_USER' => 'admin', 'PHP_AUTH_PW' => 'Maut1cR0cks!'], 'POST')->getStatusCode(), 'API v2 user write');
+    }
+
+    /**
+     * Bundle-contract review: the REST API is Mautic's own `api` firewall's business, so API keys
+     * and OAuth clients keep working under SSO. The guard's refusal is an empty 401; whatever the
+     * API answers, it is not that.
+     */
+    public function testApiCredentialsReachTheApiFirewallUnderSso(): void
+    {
+        foreach ([
+            'API query'  => $this->get('/api/contacts?access_token=x', null),
+            'API bearer' => $this->get('/api/contacts', null, ['HTTP_AUTHORIZATION' => 'Bearer x']),
+            'API basic'  => $this->get('/api/v2/docs.json', null, ['PHP_AUTH_USER' => 'admin', 'PHP_AUTH_PW' => 'Maut1cR0cks!']),
+            'token'      => $this->get('/oauth/v2/token', null, [], 'POST'),
+        ] as $label => $response) {
+            self::assertFalse(in_array($response->getStatusCode(), [Response::HTTP_UNAUTHORIZED, Response::HTTP_NOT_FOUND], true) && '' === $response->getContent(), "{$label} was refused by the SSO guard");
+        }
     }
 
     public function testEncodedPathCannotSkipTheCredentialCheck(): void
@@ -212,7 +228,7 @@ final class MpassLocalAuthGuardTest extends AbstractMpassTestCase
 
     public function testLogoutLinkIsPortalAndLogoutRouteClearsNothing(): void
     {
-        $this->restartWithEnv('MPASS_PORTAL_URL', 'https://foss.example.test');
+        $this->restartWithEnv('LOGOUT_REDIRECT_URL', 'https://foss.example.test');
         $this->createUser('alice@example.com');
         $page = $this->get('/s/account', 'alice@example.com');
         self::assertStringContainsString('href="https://foss.example.test"', (string) $page->getContent());
@@ -225,6 +241,25 @@ final class MpassLocalAuthGuardTest extends AbstractMpassTestCase
         self::assertSame('https://foss.example.test', $response->headers->get('Location'));
         self::assertSame($session, $this->sessionId(), 'the session cookie is unchanged');
         $this->assertServedAs('alice@example.com', $this->get('/s/account', null));
+    }
+
+    /**
+     * A missing or non-http(s) LOGOUT_REDIRECT_URL is never redirected to: the menu keeps the
+     * logout route, whose guard shows the static page.
+     */
+    public function testInvalidLogoutRedirectUrlIsNotFollowed(): void
+    {
+        $this->createUser('alice@example.com');
+        foreach ([null, '', '/', 'foss.example.test', 'javascript:alert(1)'] as $url) {
+            $this->restartWithEnv('LOGOUT_REDIRECT_URL', $url);
+
+            $page = $this->get('/s/account', 'alice@example.com');
+            self::assertStringContainsString('/s/logout', (string) $page->getContent(), var_export($url, true));
+
+            $response = $this->get('/s/logout', 'alice@example.com');
+            self::assertSame(Response::HTTP_OK, $response->getStatusCode(), var_export($url, true));
+            self::assertFalse($response->headers->has('Location'), var_export($url, true));
+        }
     }
 
     public function testLoginPageNeverLoops(): void

@@ -37,13 +37,15 @@ use Twig\Environment;
  *  2. the mautic-secure router runs strip-auth-headers before mpass-auth;
  *  3. oauth2-proxy validates the session and re-injects the headers on every request.
  *
- * Contract: sso-rules-moneta openspec/specs/proxy-auth-middleware/spec.md;
- * design: openspec/changes/add-mautic-to-sso/design.md §2–§4.
+ * Behaviour and rationale: doc/mpass_sso.md.
  */
 final class MpassProxyAuthenticator extends AbstractAuthenticator implements InteractiveAuthenticatorInterface
 {
     /** Request attribute: expire REMEMBERME on this response (read by MpassLocalAuthGuard). */
     public const EXPIRE_REMEMBER_ME = '_mpass_expire_rememberme';
+
+    /** The SSO default role the image creates at boot (docker/mpass/mautic-users.php). */
+    public const MEMBER_ROLE = 'mPass Member';
 
     public function __construct(
         private readonly ProxyIdentity $identity,
@@ -146,7 +148,7 @@ final class MpassProxyAuthenticator extends AbstractAuthenticator implements Int
 
     /**
      * G13c: PHP's session GC is probabilistic, so a session idle for longer than the TTL is dropped
-     * here. session.gc_maxlifetime is the adapter the image renders from SESSION_TTL_SECONDS.
+     * here. session.gc_maxlifetime is what the image renders from SESSION_COOKIE_MAX_AGE_SECONDS.
      */
     private function expireIdleSession(Request $request): void
     {
@@ -194,6 +196,8 @@ final class MpassProxyAuthenticator extends AbstractAuthenticator implements Int
         $user = new User();
         $user->setEmail($email);
         $user->setUsername($email);
+        // Mautic requires a last name; the email domain is the only other part of the identity.
+        // Users edit both in their profile (doc/mpass_sso.md).
         $user->setFirstName($local);
         $user->setLastName($domain);
         $user->setRole($role);
@@ -214,13 +218,19 @@ final class MpassProxyAuthenticator extends AbstractAuthenticator implements Int
     }
 
     /**
-     * MPASS_SSO_DEFAULT_ROLE holds the id of a least-privilege, non-admin, published role created
-     * at deploy time. Checked every time a user is created; existing users are never re-roled.
+     * MPASS_SSO_DEFAULT_ROLE (a role id) when set, else the role named "mPass Member" the image
+     * creates at boot, so a fresh deployment needs no id copied into env. Either way it must be a
+     * non-admin, published role. Checked every time a user is created; existing users are never
+     * re-roled.
      */
     private function defaultRole(): Role
     {
         $id   = trim((string) $this->defaultRole);
-        $role = ctype_digit($id) ? $this->em()->find(Role::class, (int) $id) : null;
+        $role = match (true) {
+            '' === $id      => $this->em()->getRepository(Role::class)->findOneBy(['name' => self::MEMBER_ROLE]),
+            ctype_digit($id) => $this->em()->find(Role::class, (int) $id),
+            default          => null,
+        };
 
         if (!$role instanceof Role || $role->isAdmin() || !$role->isPublished()) {
             throw new MpassRefusalException(MpassRefusalException::ROLE);

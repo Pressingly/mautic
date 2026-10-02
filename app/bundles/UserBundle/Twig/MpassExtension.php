@@ -24,7 +24,9 @@ final class MpassExtension extends AbstractExtension
     {
         return [
             new TwigFunction('mpassSsoEnabled', fn (): bool => $this->identity->isSso()),
-            new TwigFunction('mpassPortalUrl', fn (): string => (string) $this->portalUrl),
+            // '' unless an absolute http(s) URL: the menu then keeps the logout route, whose guard
+            // logs the bad value and shows the static page.
+            new TwigFunction('mpassPortalUrl', fn (): string => (string) ProxyIdentity::portalUrl($this->portalUrl)),
         ];
     }
 }

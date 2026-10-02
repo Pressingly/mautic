@@ -22,7 +22,7 @@ curl_in() { docker run --rm --network "$NET" curlimages/curl:8.10.1 -s "$@"; }
 base_env=(-e MAUTIC_SITE_URL=$SITE -e MAUTIC_DB_HOST=$DB_HOST -e MAUTIC_DB_USER=$DB_USER
           -e MAUTIC_DB_PASSWORD=$DB_PASS -e MAUTIC_DB_NAME=$DB_NAME
           -e TRUSTED_PROXIES=172.16.0.0/12,192.168.0.0/16,10.0.0.0/8)
-sso_env=(-e AUTH_TYPE=SSO -e MPASS_EDGE_SECRET=$SECRET -e MPASS_ALLOW_ANY_TENANT=1 -e SESSION_TTL_SECONDS=3600)
+sso_env=(-e AUTH_TYPE=SSO -e MPASS_EDGE_SECRET=$SECRET -e MPASS_ALLOW_ANY_TENANT=1 -e SESSION_COOKIE_MAX_AGE_SECONDS=3600)
 
 refuses() { # $1 label, $2 expected message fragment, rest: extra docker args
     local label=$1 want=$2; shift 2
@@ -42,10 +42,10 @@ start() { # extra docker args
 }
 
 echo "== entrypoint refusals"
-refuses "no MPASS_EDGE_SECRET under SSO" "MPASS_EDGE_SECRET" -e AUTH_TYPE=SSO -e MPASS_ALLOW_ANY_TENANT=1
+# The edge secret is optional (unset = topology trust); only a short one is refused.
 refuses "short MPASS_EDGE_SECRET under SSO" "MPASS_EDGE_SECRET" -e AUTH_TYPE=SSO -e MPASS_EDGE_SECRET=short -e MPASS_ALLOW_ANY_TENANT=1
 refuses "no SMB_CORPORATE_ID and no MPASS_ALLOW_ANY_TENANT" "SMB_CORPORATE_ID" -e AUTH_TYPE=SSO -e MPASS_EDGE_SECRET=$SECRET
-refuses "SESSION_TTL_SECONDS=0" "SESSION_TTL_SECONDS" "${sso_env[@]}" -e SESSION_TTL_SECONDS=0
+refuses "SESSION_COOKIE_MAX_AGE_SECONDS=0" "SESSION_COOKIE_MAX_AGE_SECONDS" "${sso_env[@]}" -e SESSION_COOKIE_MAX_AGE_SECONDS=0
 
 echo "== first start, SSO on"
 start "${sso_env[@]}" || { echo "container did not start"; exit 1; }
@@ -53,6 +53,8 @@ inside() { docker exec "$NAME" "$@"; }
 # No admin email under SSO: the install admin is an unusable placeholder, and admins come only
 # from the users script (baked into the image).
 check "install admin is the .invalid placeholder" 'inside su -s /bin/sh www-data -c "php /opt/mautic-users.php list" | grep -q "mautic-install@admin.invalid .*\[admin\]"'
+check "the entrypoint created the mPass Member role" 'inside su -s /bin/sh www-data -c "php /opt/mautic-users.php ensure-member-role" | grep -q "mPass Member role id"'
+check "api_enabled is left to the admin (not in parameters_local.php)" '! inside grep -q api_enabled /var/www/html/config/parameters_local.php'
 check "grant-admin via /opt/mautic-users.php" 'inside su -s /bin/sh www-data -c "php /opt/mautic-users.php grant-admin operator@image-test.example" | grep -q Administrator'
 
 check "code is root-owned (index.php)" '[ "$(inside stat -c %U /var/www/html/index.php)" = root ]'
@@ -63,19 +65,19 @@ check "no admin_* (and so no admin password) left in local.php" '! inside grep -
 check "no key/cert files in the image" '[ -z "$(inside find /var/www/html -name "*.key" -o -name "*.pem" -o -name "*.crt" | grep -v /vendor/ | head -1)" ]'
 
 # 5.29: TTL wiring
-check "5.29 session.gc_maxlifetime = SESSION_TTL_SECONDS" '[ "$(inside php -r "echo ini_get(\"session.gc_maxlifetime\");")" = 3600 ]'
-check "5.29 session.cookie_lifetime = SESSION_TTL_SECONDS" '[ "$(inside php -r "echo ini_get(\"session.cookie_lifetime\");")" = 3600 ]'
+check "5.29 session.gc_maxlifetime = SESSION_COOKIE_MAX_AGE_SECONDS" '[ "$(inside php -r "echo ini_get(\"session.gc_maxlifetime\");")" = 3600 ]'
+check "5.29 session.cookie_lifetime = SESSION_COOKIE_MAX_AGE_SECONDS" '[ "$(inside php -r "echo ini_get(\"session.cookie_lifetime\");")" = 3600 ]'
 check "5.29 session.gc_probability > 0" '[ "$(inside php -r "echo ini_get(\"session.gc_probability\");")" -gt 0 ]'
 
 edge=(-H "Host: $HOST" -H "X-Forwarded-Proto: https" -H "X-Mpass-Edge-Secret: $SECRET" -H "X-Auth-Request-Email: operator@image-test.example")
 page=$(curl_in -D - "${edge[@]}" "http://$NAME/s/account")
-check "5.29 page mauticSessionLifetime = SESSION_TTL_SECONDS" 'grep -q "mauticSessionLifetime *= *\"3600\"" <<<"$page"'
+check "5.29 page mauticSessionLifetime = SESSION_COOKIE_MAX_AGE_SECONDS" 'grep -q "mauticSessionLifetime *= *\"3600\"" <<<"$page"'
 # 5.26: cookie flags after the entrypoint warm-up; Request::isSecure() behind the trusted proxy
 cookie=$(grep -i "^set-cookie:" <<<"$page" | grep -iv REMEMBERME | head -1)
 check "5.26 session cookie is Secure" 'grep -qi "; secure" <<<"$cookie"'
 check "5.26 session cookie is HttpOnly" 'grep -qi "; httponly" <<<"$cookie"'
 check "5.26 session cookie is SameSite=Lax" 'grep -qi "samesite=lax" <<<"$cookie"'
-check "5.26 cookie Max-Age = SESSION_TTL_SECONDS" 'grep -qi "max-age=3600" <<<"$cookie"'
+check "5.26 cookie Max-Age = SESSION_COOKIE_MAX_AGE_SECONDS" 'grep -qi "max-age=3600" <<<"$cookie"'
 # isSecure() behind the trusted proxy: with X-Forwarded-Proto https the request counts as secure
 # (served); with http Mautic sends the visitor to https. (Symfony's own redirects are relative, so
 # they cannot show the scheme.)
