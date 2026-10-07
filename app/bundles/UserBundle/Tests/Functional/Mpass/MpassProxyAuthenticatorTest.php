@@ -24,8 +24,8 @@ final class MpassProxyAuthenticatorTest extends AbstractMpassTestCase
         $before = $this->sessionId();
 
         $this->assertServedAs('alice@example.com', $this->get('/s/account', 'alice@example.com'));
-        self::assertSame($before, $this->sessionId(), 'no new session id');
-        self::assertNull($this->reload($alice)->getLastLogin(), 'no users write: authenticate() never ran');
+        $this->assertSame($before, $this->sessionId(), 'no new session id');
+        $this->assertNotInstanceOf(\DateTimeInterface::class, $this->reload($alice)->getLastLogin(), 'no users write: authenticate() never ran');
     }
 
     public function testNoLogoutWhenHeaderAbsent(): void
@@ -35,7 +35,7 @@ final class MpassProxyAuthenticatorTest extends AbstractMpassTestCase
         $before = $this->sessionId();
 
         $this->assertServedAs('alice@example.com', $this->get('/s/account', null));
-        self::assertSame($before, $this->sessionId());
+        $this->assertSame($before, $this->sessionId());
     }
 
     public function testMatchIsCaseAndWhitespaceInsensitive(): void
@@ -45,8 +45,8 @@ final class MpassProxyAuthenticatorTest extends AbstractMpassTestCase
         $before = $this->sessionId();
 
         $this->assertServedAs('alice@example.com', $this->get('/s/account', '  ALICE@Example.COM  '));
-        self::assertSame($before, $this->sessionId());
-        self::assertNull($this->reload($alice)->getLastLogin());
+        $this->assertSame($before, $this->sessionId());
+        $this->assertNotInstanceOf(\DateTimeInterface::class, $this->reload($alice)->getLastLogin());
     }
 
     public function testMismatchFlushesAndReauths(): void
@@ -57,7 +57,7 @@ final class MpassProxyAuthenticatorTest extends AbstractMpassTestCase
         $aliceSession = $this->sessionId();
 
         $this->assertServedAs('bob@example.com', $this->get('/s/account', 'bob@example.com'));
-        self::assertNotSame($aliceSession, $this->sessionId(), 'session id changed');
+        $this->assertNotSame($aliceSession, $this->sessionId(), 'session id changed');
         $this->assertOldSessionIsGone($aliceSession);
     }
 
@@ -83,8 +83,8 @@ final class MpassProxyAuthenticatorTest extends AbstractMpassTestCase
         $this->get('/mtracking.gif', 'bob@example.com');
         $this->get('/form/submit', 'bob@example.com', [], 'POST');
 
-        self::assertSame($before, $this->sessionId(), 'no flush on the public firewall');
-        self::assertNull($this->findUser('bob@example.com')->getLastLogin(), 'no login on the public firewall');
+        $this->assertSame($before, $this->sessionId(), 'no flush on the public firewall');
+        $this->assertNotInstanceOf(\DateTimeInterface::class, $this->findUser('bob@example.com')->getLastLogin(), 'no login on the public firewall');
         $this->assertServedAs('alice@example.com', $this->get('/s/account', null));
     }
 
@@ -95,25 +95,26 @@ final class MpassProxyAuthenticatorTest extends AbstractMpassTestCase
         $this->get('/s/account', 'newcomer@example.com');
 
         $user = $this->findUser('newcomer@example.com');
-        self::assertNotNull($user);
-        self::assertSame('newcomer@example.com', $user->getUserIdentifier());
-        self::assertSame('newcomer', $user->getFirstName());
-        self::assertSame('example.com', $user->getLastName());
-        self::assertSame($this->memberRole->getId(), $user->getRole()->getId());
-        self::assertTrue($user->isPublished());
-        self::assertNotEmpty($user->getPassword());
-        self::assertNotNull($user->getLastLogin(), 'InteractiveLoginEvent fired');
+        $this->assertInstanceOf(\Mautic\UserBundle\Entity\User::class, $user);
+        $this->assertSame('newcomer@example.com', $user->getUserIdentifier());
+        $this->assertSame('newcomer', $user->getFirstName());
+        $this->assertSame('example.com', $user->getLastName());
+        $this->assertSame($this->memberRole->getId(), $user->getRole()->getId());
+        $this->assertTrue($user->isPublished());
+        $this->assertNotEmpty($user->getPassword());
+        $this->assertInstanceOf(\DateTimeInterface::class, $user->getLastLogin(), 'InteractiveLoginEvent fired');
     }
 
     public function testRolePermissionsApplyOnTheFirstRequest(): void
     {
         $role = $this->em->find(Role::class, $this->memberRole->getId());
-        static::getContainer()->get(RoleModel::class)->setRolePermissions($role, ['user:users' => ['view']]);
+        $this->assertInstanceOf(Role::class, $role);
+        self::getContainer()->get(RoleModel::class)->setRolePermissions($role, ['user:users' => ['view']]);
         $this->em->persist($role);
         $this->em->flush();
 
         // The login request itself, not the next one that reloads the user from the session.
-        self::assertSame(Response::HTTP_OK, $this->get('/s/users', 'newcomer@example.com')->getStatusCode());
+        $this->assertSame(Response::HTTP_OK, $this->get('/s/users', 'newcomer@example.com')->getStatusCode());
     }
 
     public function testMixedCaseHeaderResolvesExistingUser(): void
@@ -122,7 +123,7 @@ final class MpassProxyAuthenticatorTest extends AbstractMpassTestCase
         $count = $this->userCount();
 
         $this->assertServedAs('alice@example.com', $this->get('/s/account', 'ALICE@example.COM'));
-        self::assertSame($count, $this->userCount());
+        $this->assertSame($count, $this->userCount());
     }
 
     public function testDisplayNameIsNeverTheSub(): void
@@ -132,10 +133,10 @@ final class MpassProxyAuthenticatorTest extends AbstractMpassTestCase
         $this->get('/s/account', '1020010000019120', ['HTTP_X_AUTH_REQUEST_USER' => $sub]);
 
         $user = $this->findUser('1020010000019120@corp.example');
-        self::assertNotNull($user);
-        self::assertSame('1020010000019120', $user->getFirstName());
-        self::assertSame('corp.example', $user->getLastName());
-        self::assertNull($this->findUser($sub));
+        $this->assertInstanceOf(\Mautic\UserBundle\Entity\User::class, $user);
+        $this->assertSame('1020010000019120', $user->getFirstName());
+        $this->assertSame('corp.example', $user->getLastName());
+        $this->assertNotInstanceOf(\Mautic\UserBundle\Entity\User::class, $this->findUser($sub));
     }
 
     public function testSqlWildcardsAreLiteral(): void
@@ -144,8 +145,8 @@ final class MpassProxyAuthenticatorTest extends AbstractMpassTestCase
 
         $this->get('/s/account', 'v%@example.com');
 
-        self::assertNotNull($this->findUser('v%@example.com'), 'a new user, not the victim');
-        self::assertNull($this->reload($victim)->getLastLogin());
+        $this->assertInstanceOf(\Mautic\UserBundle\Entity\User::class, $this->findUser('v%@example.com'), 'a new user, not the victim');
+        $this->assertNotInstanceOf(\DateTimeInterface::class, $this->reload($victim)->getLastLogin());
     }
 
     public function testUsernameEqualToHeaderEmailDoesNotImpersonate(): void
@@ -154,8 +155,8 @@ final class MpassProxyAuthenticatorTest extends AbstractMpassTestCase
         $count = $this->userCount();
 
         $this->assertRefused('conflict', $this->get('/s/account', 'bob@corp.com'));
-        self::assertSame($count, $this->userCount());
-        self::assertNull($this->reload($x)->getLastLogin(), 'X was not logged in');
+        $this->assertSame($count, $this->userCount());
+        $this->assertNotInstanceOf(\DateTimeInterface::class, $this->reload($x)->getLastLogin(), 'X was not logged in');
     }
 
     public function testUniqueViolationFallsBackToRead(): void
@@ -163,19 +164,18 @@ final class MpassProxyAuthenticatorTest extends AbstractMpassTestCase
         // Simulates losing the INSERT race: the row appears between the lookup and the flush.
         $count = $this->userCount();
         $this->createUser('racer@example.com', username: 'racer@example.com', role: $this->memberRole);
-        $connection = $this->connection;
-        $table      = MAUTIC_TABLE_PREFIX.'users';
-        $connection->executeStatement("UPDATE {$table} SET email = 'RACER-PENDING' WHERE email = 'racer@example.com'");
+        $table = MAUTIC_TABLE_PREFIX.'users';
+        $this->connection->executeStatement("UPDATE {$table} SET email = 'RACER-PENDING' WHERE email = 'racer@example.com'");
 
-        $listener = function () use ($connection, $table): void {
-            $connection->executeStatement("UPDATE {$table} SET email = 'racer@example.com' WHERE email = 'RACER-PENDING'");
+        $listener = function () use ($table): void {
+            $this->connection->executeStatement("UPDATE {$table} SET email = 'racer@example.com' WHERE email = 'RACER-PENDING'");
         };
-        static::getContainer()->get('event_dispatcher')->addListener(\Mautic\UserBundle\UserEvents::USER_PRE_SAVE, $listener);
+        self::getContainer()->get(\Symfony\Component\EventDispatcher\EventDispatcherInterface::class)->addListener(\Mautic\UserBundle\UserEvents::USER_PRE_SAVE, $listener);
 
         $response = $this->get('/s/account', 'racer@example.com');
 
-        self::assertSame(Response::HTTP_OK, $response->getStatusCode());
-        self::assertSame($count + 1, $this->userCount(), 'no duplicate row');
+        $this->assertSame(Response::HTTP_OK, $response->getStatusCode());
+        $this->assertSame($count + 1, $this->userCount(), 'no duplicate row');
     }
 
     public function testUnresolvableIdentityFlushes(): void
@@ -186,7 +186,7 @@ final class MpassProxyAuthenticatorTest extends AbstractMpassTestCase
         $count        = $this->userCount();
 
         $this->assertRefused('unresolvable', $this->get('/s/account', '1020010000019120')); // no DEFAULT_EMAIL_DOMAIN
-        self::assertSame($count, $this->userCount());
+        $this->assertSame($count, $this->userCount());
         $this->assertOldSessionIsGone($aliceSession);
     }
 
@@ -195,7 +195,7 @@ final class MpassProxyAuthenticatorTest extends AbstractMpassTestCase
         $count = $this->userCount();
 
         $this->assertAnonymous($this->get('/s/account', '   ', ['HTTP_X_AUTH_REQUEST_USER' => '892ae5ac-1c2d-4e5f-8a9b-0c1d2e3f4a5b']));
-        self::assertSame($count, $this->userCount());
+        $this->assertSame($count, $this->userCount());
     }
 
     public function testDefaultRoleGuard(): void
@@ -212,7 +212,7 @@ final class MpassProxyAuthenticatorTest extends AbstractMpassTestCase
         foreach ($cases as $case => $value) {
             $this->restartWithEnv('MPASS_SSO_DEFAULT_ROLE', $value);
             $this->assertRefused('role', $this->get('/s/account', "role-{$case}@example.com"), $case);
-            self::assertSame($count, $this->userCount(), $case);
+            $this->assertSame($count, $this->userCount(), $case);
         }
     }
 
@@ -227,7 +227,7 @@ final class MpassProxyAuthenticatorTest extends AbstractMpassTestCase
         $this->restartWithEnv('MPASS_SSO_DEFAULT_ROLE', null);
 
         $this->assertServedAs('newcomer@example.com', $this->get('/s/account', 'newcomer@example.com'));
-        self::assertSame($member->getId(), $this->findUser('newcomer@example.com')->getRole()->getId());
+        $this->assertSame($member->getId(), $this->findUser('newcomer@example.com')->getRole()->getId());
 
         $this->em->find(Role::class, $member->getId())->setIsAdmin(true);
         $this->em->flush();
@@ -240,7 +240,7 @@ final class MpassProxyAuthenticatorTest extends AbstractMpassTestCase
         $alice = $this->createUser('alice@example.com');
 
         $this->assertServedAs('alice@example.com', $this->get('/s/account', 'alice@example.com'));
-        self::assertSame($this->adminRole->getId(), $this->reload($alice)->getRole()->getId());
+        $this->assertSame($this->adminRole->getId(), $this->reload($alice)->getRole()->getId());
     }
 
     // --- corporate-tenant binding (audit row 22) ----------------------------------------------
@@ -261,8 +261,8 @@ final class MpassProxyAuthenticatorTest extends AbstractMpassTestCase
 
         $this->assertRefused('corporate', $this->get('/s/account', 'alice@example.com'));
         $this->assertRefused('corporate', $this->get('/s/account', 'newcomer@example.com'));
-        self::assertSame($count, $this->userCount(), 'nobody provisioned');
-        self::assertNull($this->reload($alice)->getLastLogin());
+        $this->assertSame($count, $this->userCount(), 'nobody provisioned');
+        $this->assertNotInstanceOf(\DateTimeInterface::class, $this->reload($alice)->getLastLogin());
 
         $this->restartWithEnv('MPASS_ALLOW_ANY_TENANT', '0');
         $this->assertRefused('corporate', $this->get('/s/account', 'alice@example.com'), 'only "1" opts in');
@@ -300,13 +300,13 @@ final class MpassProxyAuthenticatorTest extends AbstractMpassTestCase
         $this->assertCorporateRefusal([]);
         $this->assertCorporateRefusal(['HTTP_X_AUTH_REQUEST_ACCESS_TOKEN' => 'not-a-jwt']);
         $this->assertCorporateRefusal(['HTTP_X_AUTH_REQUEST_ACCESS_TOKEN' => 'a.!!!.c']);
-        $this->assertCorporateRefusal(['HTTP_X_AUTH_REQUEST_ACCESS_TOKEN' => 'a.'.self::b64('"a string"').'.c']);
+        $this->assertCorporateRefusal(['HTTP_X_AUTH_REQUEST_ACCESS_TOKEN' => 'a.'.$this->b64('"a string"').'.c']);
     }
 
     public function testCorporateRefusalLeavesNoOrphanUserRow(): void
     {
         $this->assertCorporateRefusal($this->token(['custom:is_corporate' => 'true', 'custom:corporate_id' => 'globex-7']), 'newcomer@example.com');
-        self::assertNull($this->findUser('newcomer@example.com'));
+        $this->assertNotInstanceOf(\Mautic\UserBundle\Entity\User::class, $this->findUser('newcomer@example.com'));
     }
 
     public function testCorporateRefusalStillFlushesExistingSession(): void
@@ -317,7 +317,7 @@ final class MpassProxyAuthenticatorTest extends AbstractMpassTestCase
         $aliceSession = $this->sessionId();
 
         $this->assertRefused('corporate', $this->get('/s/account', 'mallory@example.com', $this->token(['custom:is_corporate' => 'true', 'custom:corporate_id' => 'globex-7'])));
-        self::assertNull($this->findUser('mallory@example.com'));
+        $this->assertNotInstanceOf(\Mautic\UserBundle\Entity\User::class, $this->findUser('mallory@example.com'));
         $this->assertOldSessionIsGone($aliceSession);
     }
 
@@ -330,7 +330,7 @@ final class MpassProxyAuthenticatorTest extends AbstractMpassTestCase
         $this->assertServedAs('alice@example.com', $this->get('/s/account', 'alice@example.com', $good));
         $session = $this->sessionId();
         $this->assertServedAs('alice@example.com', $this->get('/s/account', 'alice@example.com', $good));
-        self::assertSame($session, $this->sessionId(), 'matching session short-circuits');
+        $this->assertSame($session, $this->sessionId(), 'matching session short-circuits');
 
         $this->assertRefused('corporate', $this->get('/s/keep-alive', 'alice@example.com', $this->token(['custom:is_corporate' => 'false'])));
     }
@@ -343,27 +343,27 @@ final class MpassProxyAuthenticatorTest extends AbstractMpassTestCase
         $count = $this->userCount();
 
         $this->assertAnonymous($this->get('/s/account', 'newcomer@example.com'));
-        self::assertSame($count, $this->userCount());
+        $this->assertSame($count, $this->userCount());
     }
 
     public function testAuthTypeIsResolvedAtRuntime(): void
     {
-        $compiled = glob(static::getContainer()->getParameter('kernel.cache_dir').'/*Container*.php') ?: [];
-        self::assertNotEmpty($compiled);
+        $compiled = glob(self::getContainer()->getParameter('kernel.cache_dir').'/*Container*.php') ?: [];
+        $this->assertNotEmpty($compiled);
         clearstatcache();
-        $mtimes = array_map('filemtime', $compiled);
+        $mtimes = array_map(filemtime(...), $compiled);
 
         $this->restartWithEnv('AUTH_TYPE', null);
-        self::assertTrue(static::getContainer()->has(MpassProxyAuthenticator::class), 'registered while the flag is unset');
+        $this->assertTrue(self::getContainer()->has(MpassProxyAuthenticator::class), 'registered while the flag is unset');
         $this->assertAnonymous($this->get('/s/account', 'runtime@example.com'));
-        self::assertNull($this->findUser('runtime@example.com'));
+        $this->assertNotInstanceOf(\Mautic\UserBundle\Entity\User::class, $this->findUser('runtime@example.com'));
 
         $this->restartWithEnv('AUTH_TYPE', 'SSO');
         $this->get('/s/account', 'runtime@example.com');
-        self::assertNotNull($this->findUser('runtime@example.com'), 'same compiled container, flag flipped at runtime');
+        $this->assertInstanceOf(\Mautic\UserBundle\Entity\User::class, $this->findUser('runtime@example.com'), 'same compiled container, flag flipped at runtime');
 
         clearstatcache();
-        self::assertSame($mtimes, array_map('filemtime', $compiled), 'the container was not recompiled');
+        $this->assertSame($mtimes, array_map(filemtime(...), $compiled), 'the container was not recompiled');
     }
 
     public function testDefaultRoleIsNotReadFromMauticConfig(): void
@@ -386,8 +386,8 @@ final class MpassProxyAuthenticatorTest extends AbstractMpassTestCase
         $this->ageSession($before, $ttl + 60);
 
         $this->assertServedAs('alice@example.com', $this->get('/s/account', 'alice@example.com'));
-        self::assertNotSame($before, $this->sessionId(), 'the idle session was replaced');
-        self::assertNotNull($this->reload($alice)->getLastLogin(), 're-established by Rule 3');
+        $this->assertNotSame($before, $this->sessionId(), 'the idle session was replaced');
+        $this->assertInstanceOf(\DateTimeInterface::class, $this->reload($alice)->getLastLogin(), 're-established by Rule 3');
     }
 
     // --- edge secret (review finding 2a) -------------------------------------------------------
@@ -401,17 +401,17 @@ final class MpassProxyAuthenticatorTest extends AbstractMpassTestCase
         foreach (['', 'wrong-'.self::EDGE_SECRET] as $secret) {
             foreach (['/s/account', '/s/dashboard', '/s/keep-alive', '/%73/account'] as $path) {
                 $response = $this->get($path, 'forged@example.com', ['HTTP_X_MPASS_EDGE_SECRET' => $secret]);
-                self::assertSame(403, $response->getStatusCode(), "{$path} with secret '{$secret}'");
+                $this->assertSame(403, $response->getStatusCode(), "{$path} with secret '{$secret}'");
             }
         }
-        self::assertSame($count, $this->userCount(), 'nobody provisioned');
+        $this->assertSame($count, $this->userCount(), 'nobody provisioned');
 
         // ...an existing session is neither served nor flushed by such a request...
         $alice = $this->createUser('alice@example.com');
         $this->loginUser($alice);
         $before = $this->sessionId();
-        self::assertSame(403, $this->get('/s/account', 'mallory@example.com', ['HTTP_X_MPASS_EDGE_SECRET' => 'wrong'])->getStatusCode());
-        self::assertSame($before, $this->sessionId());
+        $this->assertSame(403, $this->get('/s/account', 'mallory@example.com', ['HTTP_X_MPASS_EDGE_SECRET' => 'wrong'])->getStatusCode());
+        $this->assertSame($before, $this->sessionId());
         $this->assertServedAs('alice@example.com', $this->get('/s/account', 'alice@example.com'));
     }
 
@@ -419,8 +419,8 @@ final class MpassProxyAuthenticatorTest extends AbstractMpassTestCase
     {
         $count = $this->userCount();
 
-        self::assertSame(200, $this->get('/mtracking.gif', 'forged@example.com', ['HTTP_X_MPASS_EDGE_SECRET' => ''])->getStatusCode());
-        self::assertSame($count, $this->userCount());
+        $this->assertSame(200, $this->get('/mtracking.gif', 'forged@example.com', ['HTTP_X_MPASS_EDGE_SECRET' => ''])->getStatusCode());
+        $this->assertSame($count, $this->userCount());
     }
 
     /**
@@ -438,8 +438,8 @@ final class MpassProxyAuthenticatorTest extends AbstractMpassTestCase
     public function testShortEdgeSecretTrustsNothing(): void
     {
         $this->restartWithEnv('MPASS_EDGE_SECRET', 'short');
-        self::assertSame(403, $this->get('/s/account', 'forged@example.com', ['HTTP_X_MPASS_EDGE_SECRET' => 'short'])->getStatusCode());
-        self::assertNull($this->findUser('forged@example.com'));
+        $this->assertSame(403, $this->get('/s/account', 'forged@example.com', ['HTTP_X_MPASS_EDGE_SECRET' => 'short'])->getStatusCode());
+        $this->assertNotInstanceOf(\Mautic\UserBundle\Entity\User::class, $this->findUser('forged@example.com'));
     }
 
     // --- review finding 15 ---------------------------------------------------------------------
@@ -451,16 +451,16 @@ final class MpassProxyAuthenticatorTest extends AbstractMpassTestCase
         $before = $this->sessionId();
 
         $this->assertServedAs('alice@example.com', $this->get('/s/account', " \t "));
-        self::assertSame($before, $this->sessionId());
+        $this->assertSame($before, $this->sessionId());
     }
 
     public function testNewEmailOnTheTrackingPixelCreatesNoUser(): void
     {
         $count = $this->userCount();
 
-        self::assertSame(Response::HTTP_OK, $this->get('/mtracking.gif', 'pixel@example.com')->getStatusCode());
-        self::assertSame($count, $this->userCount());
-        self::assertNull($this->findUser('pixel@example.com'));
+        $this->assertSame(Response::HTTP_OK, $this->get('/mtracking.gif', 'pixel@example.com')->getStatusCode());
+        $this->assertSame($count, $this->userCount());
+        $this->assertNotInstanceOf(\Mautic\UserBundle\Entity\User::class, $this->findUser('pixel@example.com'));
     }
 
     // --- review finding 8 ----------------------------------------------------------------------
@@ -469,7 +469,7 @@ final class MpassProxyAuthenticatorTest extends AbstractMpassTestCase
     {
         $this->createUser('bob@example.com');
         // An anonymous session with attributes a previous visitor left (no security token in it).
-        $previous = static::getContainer()->get('session.factory')->createSession();
+        $previous = self::getContainer()->get('session.factory')->createSession(); // @phpstan-ignore mautic.noContainerGet (no class-id alias)
         $previous->start();
         $previous->set('mpass_previous_visitor', 'alice-state');
         $previous->save();
@@ -477,15 +477,15 @@ final class MpassProxyAuthenticatorTest extends AbstractMpassTestCase
 
         $this->assertServedAs('bob@example.com', $this->get('/s/account', 'bob@example.com'));
 
-        self::assertNotSame($previous->getId(), $this->sessionId(), 'a new session id');
-        $file = static::getContainer()->getParameter('kernel.cache_dir').'/sessions/'.$this->sessionId().'.mocksess';
-        self::assertFileExists($file);
-        self::assertStringNotContainsString('alice-state', (string) file_get_contents($file), 'bob did not inherit it');
+        $this->assertNotSame($previous->getId(), $this->sessionId(), 'a new session id');
+        $file = self::getContainer()->getParameter('kernel.cache_dir').'/sessions/'.$this->sessionId().'.mocksess';
+        $this->assertFileExists($file);
+        $this->assertStringNotContainsString('alice-state', (string) file_get_contents($file), 'bob did not inherit it');
     }
 
     // --- helpers ------------------------------------------------------------------------------
 
-    private static function b64(string $s): string
+    private function b64(string $s): string
     {
         return rtrim(strtr(base64_encode($s), '+/', '-_'), '=');
     }
@@ -497,7 +497,7 @@ final class MpassProxyAuthenticatorTest extends AbstractMpassTestCase
      */
     private function token(array $claims): array
     {
-        return ['HTTP_X_AUTH_REQUEST_ACCESS_TOKEN' => self::b64('{"alg":"none"}').'.'.self::b64((string) json_encode($claims)).'.sig'];
+        return ['HTTP_X_AUTH_REQUEST_ACCESS_TOKEN' => $this->b64('{"alg":"none"}').'.'.$this->b64((string) json_encode($claims)).'.sig'];
     }
 
     /**
@@ -509,15 +509,15 @@ final class MpassProxyAuthenticatorTest extends AbstractMpassTestCase
         $count = $this->userCount();
 
         $this->assertRefused('corporate', $this->get('/s/account', $email, $server));
-        self::assertSame($count, $this->userCount(), 'refused before find-or-create');
+        $this->assertSame($count, $this->userCount(), 'refused before find-or-create');
     }
 
     /** Rewrites the stored MetadataBag "last used" timestamp of a mock-file session. */
     private function ageSession(?string $id, int $seconds): void
     {
-        $file = static::getContainer()->getParameter('kernel.cache_dir').'/sessions/'.$id.'.mocksess';
-        self::assertFileExists($file);
-        $data = unserialize((string) file_get_contents($file));
+        $file = self::getContainer()->getParameter('kernel.cache_dir').'/sessions/'.$id.'.mocksess';
+        $this->assertFileExists($file);
+        $data = unserialize((string) file_get_contents($file), ['allowed_classes' => true]); // the test's own session file; it holds the security token
         $data['_sf2_meta']['u'] -= $seconds;
         $data['_sf2_meta']['c'] -= $seconds;
         file_put_contents($file, serialize($data));

@@ -30,7 +30,7 @@ final class SysinfoModel
         private readonly Connection $connection,
         private readonly InstallService $installService,
         private readonly CheckStep $checkStep,
-        private readonly ?ProxyIdentity $mpass = null, // fork: mPass SSO only
+        private readonly ProxyIdentity $mpass, // fork: mPass SSO only
     ) {
     }
 
@@ -47,7 +47,7 @@ final class SysinfoModel
 
         // Under mPass SSO no phpinfo(): under mod_php its module section lists the request headers
         // (the edge secret Traefik injects) and the Apache environment. Version line only.
-        if ($this->mpass?->isSso()) {
+        if ($this->mpass->isSso()) {
             $this->phpInfo = $this->translator->trans('mautic.sysinfo.phpinfo.phpversion', ['%phpversion%' => PHP_VERSION]);
         } elseif (function_exists('phpinfo') && 'cli' !== PHP_SAPI) {
             ob_start();

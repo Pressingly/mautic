@@ -98,21 +98,21 @@ abstract class AbstractMpassTestCase extends MauticMysqlTestCase
 
     protected function assertServedAs(string $username, Response $response): void
     {
-        self::assertSame(Response::HTTP_OK, $response->getStatusCode(), 'Location: '.$response->headers->get('Location').' '.substr(strip_tags((string) $response->getContent()), 0, 300));
-        self::assertMatchesRegularExpression('/LoginUserName\s*=\s*\''.preg_quote(str_replace('@', '\\u0040', $username), '/').'\'/', (string) $response->getContent());
+        $this->assertSame(Response::HTTP_OK, $response->getStatusCode(), 'Location: '.$response->headers->get('Location').' '.substr(strip_tags((string) $response->getContent()), 0, 300));
+        $this->assertMatchesRegularExpression('/LoginUserName\s*=\s*\''.preg_quote(str_replace('@', '\\u0040', $username), '/').'\'/', (string) $response->getContent());
     }
 
     protected function assertRefused(string $reason, Response $response, string $message = ''): void
     {
-        self::assertSame(Response::HTTP_FORBIDDEN, $response->getStatusCode(), $message);
-        self::assertStringContainsString('data-reason="'.$reason.'"', (string) $response->getContent(), $message);
-        self::assertFalse($response->headers->has('Location'), 'no redirect, so no loop');
+        $this->assertSame(Response::HTTP_FORBIDDEN, $response->getStatusCode(), $message);
+        $this->assertStringContainsString('data-reason="'.$reason.'"', (string) $response->getContent(), $message);
+        $this->assertFalse($response->headers->has('Location'), 'no redirect, so no loop');
     }
 
     protected function assertAnonymous(Response $response): void
     {
-        self::assertSame(Response::HTTP_FOUND, $response->getStatusCode(), 'anonymous → entry point');
-        self::assertStringEndsWith('/s/login', (string) $response->headers->get('Location'));
+        $this->assertSame(Response::HTTP_FOUND, $response->getStatusCode(), 'anonymous → entry point');
+        $this->assertStringEndsWith('/s/login', (string) $response->headers->get('Location'));
     }
 
     /** Replaying the previous user's session cookie with no header must not serve them. */
@@ -126,7 +126,7 @@ abstract class AbstractMpassTestCase extends MauticMysqlTestCase
 
     protected function sessionName(): string
     {
-        return (string) static::getContainer()->get('session.factory')->createSession()->getName();
+        return (string) static::getContainer()->get('session.factory')->createSession()->getName(); // @phpstan-ignore mautic.noContainerGet (no class-id alias)
     }
 
     protected function sessionId(): ?string
@@ -178,7 +178,7 @@ abstract class AbstractMpassTestCase extends MauticMysqlTestCase
 
     protected function reload(?User $user): User
     {
-        self::assertNotNull($user);
+        $this->assertInstanceOf(User::class, $user);
         $this->em->clear();
 
         return $this->em->find(User::class, $user->getId());

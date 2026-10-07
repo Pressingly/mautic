@@ -10,6 +10,7 @@ use Doctrine\Persistence\ManagerRegistry;
 use Mautic\CoreBundle\Helper\EncryptionHelper;
 use Mautic\UserBundle\Entity\PermissionRepository;
 use Mautic\UserBundle\Entity\Role;
+use Mautic\UserBundle\Entity\RoleRepository;
 use Mautic\UserBundle\Entity\User;
 use Mautic\UserBundle\Model\UserModel;
 use Mautic\UserBundle\Security\Mpass\MpassRefusalException;
@@ -23,7 +24,6 @@ use Symfony\Component\Security\Core\Exception\AuthenticationException;
 use Symfony\Component\Security\Http\Authenticator\AbstractAuthenticator;
 use Symfony\Component\Security\Http\Authenticator\InteractiveAuthenticatorInterface;
 use Symfony\Component\Security\Http\Authenticator\Passport\Badge\UserBadge;
-use Symfony\Component\Security\Http\Authenticator\Passport\Passport;
 use Symfony\Component\Security\Http\Authenticator\Passport\SelfValidatingPassport;
 use Twig\Environment;
 
@@ -53,6 +53,7 @@ final class MpassProxyAuthenticator extends AbstractAuthenticator implements Int
         private readonly ManagerRegistry $doctrine,
         private readonly UserModel $userModel,
         private readonly PermissionRepository $permissionRepository,
+        private readonly RoleRepository $roleRepository,
         private readonly Environment $twig,
         private readonly LoggerInterface $logger,
         private readonly ?string $defaultRole,
@@ -85,7 +86,7 @@ final class MpassProxyAuthenticator extends AbstractAuthenticator implements Int
         return true;
     }
 
-    public function authenticate(Request $request): Passport
+    public function authenticate(Request $request): SelfValidatingPassport
     {
         // Rule 2 — flush FIRST, before any refusal can bail out.
         $this->flush($request);
@@ -106,7 +107,7 @@ final class MpassProxyAuthenticator extends AbstractAuthenticator implements Int
         // the next request reloads the user from the session.
         $user->setActivePermissions($this->permissionRepository->getPermissionsByRole($user->getRole()));
 
-        return new SelfValidatingPassport(new UserBadge($user->getUserIdentifier(), fn () => $user));
+        return new SelfValidatingPassport(new UserBadge($user->getUserIdentifier(), fn (): User => $user));
     }
 
     public function onAuthenticationSuccess(Request $request, TokenInterface $token, string $firewallName): ?Response
@@ -206,7 +207,7 @@ final class MpassProxyAuthenticator extends AbstractAuthenticator implements Int
 
         try {
             $this->userModel->saveEntity($user);
-        } catch (UniqueConstraintViolationException $e) {
+        } catch (UniqueConstraintViolationException $e) { // @phpstan-ignore catch.neverThrown (the flush inside saveEntity throws it)
             $this->doctrine->resetManager(); // the EntityManager is closed after a failed flush
 
             return $this->findByEmail($email)
@@ -227,8 +228,8 @@ final class MpassProxyAuthenticator extends AbstractAuthenticator implements Int
     {
         $id   = trim((string) $this->defaultRole);
         $role = match (true) {
-            '' === $id      => $this->em()->getRepository(Role::class)->findOneBy(['name' => self::MEMBER_ROLE]),
-            ctype_digit($id) => $this->em()->find(Role::class, (int) $id),
+            '' === $id      => $this->roleRepository->findOneBy(['name' => self::MEMBER_ROLE]),
+            ctype_digit($id) => $this->roleRepository->find((int) $id),
             default          => null,
         };
 

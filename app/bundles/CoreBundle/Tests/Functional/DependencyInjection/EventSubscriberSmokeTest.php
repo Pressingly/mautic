@@ -35,6 +35,7 @@ use Mautic\SmsBundle\EventListener\CampaignSendSubscriber;
 use Mautic\UserBundle\Controller\SecurityController;
 use Mautic\UserBundle\EventListener\ApiUserSubscriber;
 use Mautic\UserBundle\EventListener\LogoutListener;
+use Mautic\UserBundle\EventListener\MpassLocalAuthGuard;
 use Mautic\UserBundle\EventListener\PasswordStrengthSubscriber;
 use Mautic\UserBundle\EventListener\PasswordSubscriber;
 use MauticPlugin\MauticFocusBundle\EventListener\FocusSubscriber;
@@ -76,11 +77,13 @@ final class EventSubscriberSmokeTest extends AbstractContainerSmokeTestCase
             RequestSubscriber::class,
             RouterSubscriber::class,
             SecurityController::class,
+            MpassLocalAuthGuard::class,
         ],
         'kernel.response' => [
             ApiSubscriber::class,
             ExceptionListener::class,
             CookieHelper::class,
+            MpassLocalAuthGuard::class,
         ],
         'kernel.exception' => [
             ExceptionListener::class,

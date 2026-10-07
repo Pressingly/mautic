@@ -30,7 +30,7 @@ use Twig\Environment;
  * app/config/security.php when that file exists, which would drop the mPass authenticator. An SSO
  * deployment must never ship one.
  */
-final class MpassLocalAuthGuard implements EventSubscriberInterface
+final readonly class MpassLocalAuthGuard implements EventSubscriberInterface
 {
     public const REMEMBER_ME_COOKIE = 'REMEMBERME';
 
@@ -64,14 +64,14 @@ final class MpassLocalAuthGuard implements EventSubscriberInterface
     ];
 
     public function __construct(
-        private readonly ProxyIdentity $identity,
-        private readonly UrlGeneratorInterface $urlGenerator,
-        private readonly Environment $twig,
-        private readonly ?string $portalUrl,
-        private readonly SessionFactoryInterface $sessionFactory,
-        private readonly ?string $rememberMePath = '/',
-        private readonly ?string $rememberMeDomain = null,
-        private readonly ?LoggerInterface $logger = null,
+        private ProxyIdentity $identity,
+        private UrlGeneratorInterface $urlGenerator,
+        private Environment $twig,
+        private ?string $portalUrl,
+        private SessionFactoryInterface $sessionFactory,
+        private LoggerInterface $logger,
+        private ?string $rememberMePath = '/',
+        private ?string $rememberMeDomain = null,
     ) {
     }
 
@@ -112,7 +112,7 @@ final class MpassLocalAuthGuard implements EventSubscriberInterface
     {
         $request = $event->getRequest();
         if (!$event->isMainRequest() || !$this->identity->isSso()
-            || preg_match(self::MAIN_FIREWALL_PATH, self::path($request))) {
+            || preg_match(self::MAIN_FIREWALL_PATH, $this->path($request))) {
             return;
         }
 
@@ -174,7 +174,7 @@ final class MpassLocalAuthGuard implements EventSubscriberInterface
         // second way into the UI, and every failed one would count against the login throttle of
         // the whole address. /api/* is left to Mautic's own `api` firewall, so API keys and OAuth
         // clients keep working under SSO (api_enabled stays an admin setting).
-        if (preg_match(self::MAIN_FIREWALL_PATH, self::path($request))
+        if (preg_match(self::MAIN_FIREWALL_PATH, $this->path($request))
             && ($request->headers->has('Authorization')
                 || $request->query->has('access_token')
                 || $request->request->has('access_token'))) {
@@ -184,9 +184,9 @@ final class MpassLocalAuthGuard implements EventSubscriberInterface
         // Round-2 review R2-5, when an edge secret is configured: every request to the admin UI that
         // came through the protected router carries it. One that does not came from inside the
         // network and is refused outright. Without a configured secret fromEdge() is always true.
-        if (preg_match(self::MAIN_FIREWALL_PATH, self::path($request)) && !$this->identity->fromEdge($request)) {
-            $this->logger?->warning('mPass SSO: admin-UI request without a valid edge secret refused', [
-                'path'                => self::path($request),
+        if (preg_match(self::MAIN_FIREWALL_PATH, $this->path($request)) && !$this->identity->fromEdge($request)) {
+            $this->logger->warning('mPass SSO: admin-UI request without a valid edge secret refused', [
+                'path'                => $this->path($request),
                 'client_ip'           => $request->getClientIp(),
                 'secret_header_given' => $request->headers->has(ProxyIdentity::EDGE_SECRET_HEADER), // never the value
             ]);
@@ -199,7 +199,7 @@ final class MpassLocalAuthGuard implements EventSubscriberInterface
         if ('mautic_user_logout' === $route) {
             $portal = ProxyIdentity::portalUrl($this->portalUrl);
             if (null === $portal) {
-                $this->logger?->error('mPass SSO: LOGOUT_REDIRECT_URL is missing or not an absolute http(s) URL; Logout does not redirect');
+                $this->logger->error('mPass SSO: LOGOUT_REDIRECT_URL is missing or not an absolute http(s) URL; Logout does not redirect');
 
                 return $this->mpassPage('logout');
             }
@@ -221,7 +221,7 @@ final class MpassLocalAuthGuard implements EventSubscriberInterface
      * The path as the firewall and router match it: they rawurldecode() the path info, so
      * `/%73/dashboard` is `/s/dashboard` to them and must be to us.
      */
-    private static function path(Request $request): string
+    private function path(Request $request): string
     {
         return rawurldecode($request->getPathInfo());
     }

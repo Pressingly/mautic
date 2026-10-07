@@ -30,7 +30,7 @@ use Mautic\WebhookBundle\Exception\PrivateAddressException;
  * only. Upstream's own webhook client (WebhookBundle/Http/Client.php) already checks private
  * addresses. See sso-rules-moneta apps/mautic/security.md, round-2 review.
  */
-final class MpassOutboundGuard
+final readonly class MpassOutboundGuard
 {
     /** IANA special-purpose and non-global ranges (RFC 6890 and successors), IPv4. */
     private const DENIED_V4 = [
@@ -46,14 +46,14 @@ final class MpassOutboundGuard
         '2002::/16', '3fff::/20', '5f00::/16', 'fc00::/7', 'fe80::/10', 'fec0::/10', 'ff00::/8',
     ];
 
-    private readonly \Closure $resolver;
+    private \Closure $resolver;
 
     public function __construct(
-        private readonly ProxyIdentity $identity,
-        private readonly CoreParametersHelper $coreParametersHelper,
-        ?\Closure $resolver = null,
+        private ProxyIdentity $identity,
+        private CoreParametersHelper $coreParametersHelper,
+        ?\Closure $resolver = null, // @phpstan-ignore mautic.noNullableServiceInConstructor (test seam for DNS, not a service)
     ) {
-        $this->resolver = $resolver ?? \Closure::fromCallable([self::class, 'resolve']);
+        $this->resolver = $resolver ?? $this->resolve(...);
     }
 
     /**
@@ -168,7 +168,7 @@ final class MpassOutboundGuard
      *
      * @return array<int, string>
      */
-    private static function resolve(string $host): array
+    private function resolve(string $host): array
     {
         $ips     = [];
         $records = @dns_get_record($host, DNS_A | DNS_AAAA);

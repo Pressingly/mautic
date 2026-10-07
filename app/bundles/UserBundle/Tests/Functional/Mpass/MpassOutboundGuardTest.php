@@ -67,14 +67,8 @@ final class MpassOutboundGuardTest extends AbstractMpassTestCase
 
     public function testConnectionIsPinnedToTheCheckedAddress(): void
     {
-        self::assertSame(
-            [RequestOptions::ALLOW_REDIRECTS => false, 'curl' => [CURLOPT_RESOLVE => ['hooks.example.test:443:93.184.216.34']]],
-            $this->guard(['93.184.216.34'])->check('https://hooks.example.test/hook')
-        );
-        self::assertSame(
-            ['hooks.example.test:8080:[2606:2800:220:1:248:1893:25c8:1946]'],
-            $this->guard(['2606:2800:220:1:248:1893:25c8:1946'])->check('http://hooks.example.test:8080/')['curl'][CURLOPT_RESOLVE]
-        );
+        $this->assertSame([RequestOptions::ALLOW_REDIRECTS => false, 'curl' => [CURLOPT_RESOLVE => ['hooks.example.test:443:93.184.216.34']]], $this->guard(['93.184.216.34'])->check('https://hooks.example.test/hook'));
+        $this->assertSame(['hooks.example.test:8080:[2606:2800:220:1:248:1893:25c8:1946]'], $this->guard(['2606:2800:220:1:248:1893:25c8:1946'])->check('http://hooks.example.test:8080/')['curl'][CURLOPT_RESOLVE]);
     }
 
     /**
@@ -83,8 +77,8 @@ final class MpassOutboundGuardTest extends AbstractMpassTestCase
     private function guard(array $answers): MpassOutboundGuard
     {
         return new MpassOutboundGuard(
-            static::getContainer()->get(\Mautic\UserBundle\Security\Mpass\ProxyIdentity::class),
-            static::getContainer()->get(\Mautic\CoreBundle\Helper\CoreParametersHelper::class),
+            self::getContainer()->get(\Mautic\UserBundle\Security\Mpass\ProxyIdentity::class),
+            self::getContainer()->get(\Mautic\CoreBundle\Helper\CoreParametersHelper::class),
             static fn (string $host): array => $answers,
         );
     }
@@ -93,15 +87,12 @@ final class MpassOutboundGuardTest extends AbstractMpassTestCase
     public function testPrivateTargetsAreRefusedUnderSso(string $url): void
     {
         $this->expectException(PrivateAddressException::class);
-        static::getContainer()->get(MpassOutboundGuard::class)->check($url);
+        self::getContainer()->get(MpassOutboundGuard::class)->check($url);
     }
 
     public function testPublicTargetIsAllowedWithoutRedirects(): void
     {
-        self::assertSame(
-            [RequestOptions::ALLOW_REDIRECTS => false],
-            static::getContainer()->get(MpassOutboundGuard::class)->check('http://93.184.216.34/hook')
-        );
+        $this->assertSame([RequestOptions::ALLOW_REDIRECTS => false], self::getContainer()->get(MpassOutboundGuard::class)->check('http://93.184.216.34/hook'));
     }
 
     public function testUpstreamAllowListIsHonoured(): void
@@ -109,21 +100,21 @@ final class MpassOutboundGuardTest extends AbstractMpassTestCase
         $this->configParams['webhook_allowed_private_addresses'] = ['10.1.2.3'];
         $this->restart();
 
-        self::assertSame([RequestOptions::ALLOW_REDIRECTS => false], static::getContainer()->get(MpassOutboundGuard::class)->check('http://10.1.2.3/hook'));
+        $this->assertSame([RequestOptions::ALLOW_REDIRECTS => false], self::getContainer()->get(MpassOutboundGuard::class)->check('http://10.1.2.3/hook'));
     }
 
     public function testUpstreamBehaviourWithoutSso(): void
     {
         $this->restartWithEnv('AUTH_TYPE', null);
 
-        self::assertSame([], static::getContainer()->get(MpassOutboundGuard::class)->check('http://127.0.0.1/'));
+        $this->assertSame([], self::getContainer()->get(MpassOutboundGuard::class)->check('http://127.0.0.1/'));
     }
 
     public function testCampaignWebhookToAPrivateAddressIsNeverSent(): void
     {
         $this->expectException(PrivateAddressException::class);
 
-        static::getContainer()->get(CampaignHelper::class)->fireWebhook([
+        self::getContainer()->get(CampaignHelper::class)->fireWebhook([
             'url'             => 'http://127.0.0.1:1/s/account',
             'method'          => 'post',
             'timeout'         => 1,
@@ -136,7 +127,7 @@ final class MpassOutboundGuardTest extends AbstractMpassTestCase
     {
         foreach ([CampaignHelper::class, FormSubscriber::class] as $service) {
             $property = new \ReflectionProperty($service, 'mpassOutboundGuard');
-            self::assertInstanceOf(MpassOutboundGuard::class, $property->getValue(static::getContainer()->get($service)), $service);
+            $this->assertInstanceOf(MpassOutboundGuard::class, $property->getValue(self::getContainer()->get($service)), $service);
         }
     }
 }

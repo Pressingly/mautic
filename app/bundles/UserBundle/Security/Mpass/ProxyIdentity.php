@@ -31,7 +31,7 @@ use Symfony\Component\HttpFoundation\Request;
  * flag. That fails towards non-SSO mode, never towards trusting headers; the image's Apache config
  * configures no HTTP auth.
  */
-final class ProxyIdentity
+final readonly class ProxyIdentity
 {
     public const EMAIL_HEADER = 'X-Auth-Request-Email';
 
@@ -43,12 +43,12 @@ final class ProxyIdentity
     private const MAX_EMAIL_LENGTH = 191;
 
     public function __construct(
-        private readonly ?string $authType,
-        private readonly ?string $defaultEmailDomain,
-        private readonly ?string $corporateId,
-        private readonly ?string $edgeSecret = null,
-        private readonly ?string $edgeSecretFile = null,
-        private readonly ?string $allowAnyTenant = null,
+        private ?string $authType,
+        private ?string $defaultEmailDomain,
+        private ?string $corporateId,
+        private ?string $edgeSecret = null,
+        private ?string $edgeSecretFile = null,
+        private ?string $allowAnyTenant = null,
     ) {
     }
 
@@ -168,7 +168,7 @@ final class ProxyIdentity
         if (!$this->fromEdge($request)) {
             return false;
         }
-        $claims = self::decodeJwtPayload((string) $request->headers->get(self::ACCESS_TOKEN_HEADER, ''));
+        $claims = $this->decodeJwtPayload((string) $request->headers->get(self::ACCESS_TOKEN_HEADER, ''));
 
         return null !== $claims
             && 'true' === ($claims['custom:is_corporate'] ?? null)
@@ -178,7 +178,7 @@ final class ProxyIdentity
     /**
      * @return array<string, mixed>|null
      */
-    private static function decodeJwtPayload(string $token): ?array
+    private function decodeJwtPayload(string $token): ?array
     {
         $parts = explode('.', trim($token));
         if (3 !== count($parts) || '' === $parts[1]) {

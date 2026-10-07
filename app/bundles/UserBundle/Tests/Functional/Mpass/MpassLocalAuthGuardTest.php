@@ -65,33 +65,33 @@ final class MpassLocalAuthGuardTest extends AbstractMpassTestCase
 
         foreach (self::GATED_REQUESTS as [$method, $path]) {
             $response = $this->get($path, null, [], $method);
-            self::assertSame(Response::HTTP_NOT_FOUND, $response->getStatusCode(), "{$method} {$path}");
-            self::assertFalse($response->headers->has('Set-Cookie') && str_contains((string) $response->headers->get('Set-Cookie'), 'REMEMBERME='), "{$method} {$path} issued no credential");
+            $this->assertSame(Response::HTTP_NOT_FOUND, $response->getStatusCode(), "{$method} {$path}");
+            $this->assertFalse($response->headers->has('Set-Cookie') && str_contains((string) $response->headers->get('Set-Cookie'), 'REMEMBERME='), "{$method} {$path} issued no credential");
         }
 
-        self::assertSame($password, $this->reload($admin)->getPassword(), 'no password changed');
-        self::assertSame($count, $this->userCount(), 'no user created');
+        $this->assertSame($password, $this->reload($admin)->getPassword(), 'no password changed');
+        $this->assertSame($count, $this->userCount(), 'no user created');
     }
 
     public function testIndexPhpPrefixIsGated(): void
     {
         $server = ['SCRIPT_NAME' => '/index.php', 'SCRIPT_FILENAME' => '/app/index.php'];
-        self::assertSame(Response::HTTP_NOT_FOUND, $this->get('/index.php/passwordreset', null, $server)->getStatusCode());
+        $this->assertSame(Response::HTTP_NOT_FOUND, $this->get('/index.php/passwordreset', null, $server)->getStatusCode());
 
         $this->restartWithEnv('AUTH_TYPE', null);
-        self::assertSame(Response::HTTP_OK, $this->get('/index.php/passwordreset', null, $server)->getStatusCode(), 'the prefixed path does resolve to the route');
+        $this->assertSame(Response::HTTP_OK, $this->get('/index.php/passwordreset', null, $server)->getStatusCode(), 'the prefixed path does resolve to the route');
     }
 
     public function testInertWhenAuthTypeUnset(): void
     {
         $this->restartWithEnv('AUTH_TYPE', null);
 
-        self::assertSame(Response::HTTP_OK, $this->get('/passwordreset', null)->getStatusCode());
+        $this->assertSame(Response::HTTP_OK, $this->get('/passwordreset', null)->getStatusCode());
         $login = $this->get('/s/login', 'alice@example.com');
-        self::assertSame(Response::HTTP_OK, $login->getStatusCode());
-        self::assertStringContainsString('name="_password"', (string) $login->getContent(), 'the password form is served');
-        self::assertSame(Response::HTTP_FOUND, $this->get('/s/logout', null)->getStatusCode());
-        self::assertStringEndsWith('/s/login', (string) $this->client->getResponse()->headers->get('Location'), 'upstream logout');
+        $this->assertSame(Response::HTTP_OK, $login->getStatusCode());
+        $this->assertStringContainsString('name="_password"', (string) $login->getContent(), 'the password form is served');
+        $this->assertSame(Response::HTTP_FOUND, $this->get('/s/logout', null)->getStatusCode());
+        $this->assertStringEndsWith('/s/login', (string) $this->client->getResponse()->headers->get('Location'), 'upstream logout');
     }
 
     public function testRouteInventory(): void
@@ -101,11 +101,11 @@ final class MpassLocalAuthGuardTest extends AbstractMpassTestCase
         $unguarded = [];
         $sensitive = [];
 
-        foreach (static::getContainer()->get(RouterInterface::class)->getRouteCollection() as $name => $route) {
+        foreach (self::getContainer()->get(RouterInterface::class)->getRouteCollection() as $name => $route) {
             $controller = $route->getDefault('_controller');
             $class      = is_string($controller) ? explode('::', $controller)[0] : null;
-            if (null !== $class && !class_exists($class) && static::getContainer()->has($class)) {
-                $class = get_class(static::getContainer()->get($class)); // controller given as a service id
+            if (null !== $class && !class_exists($class) && self::getContainer()->has($class)) {
+                $class = self::getContainer()->get($class)::class; // controller given as a service id
             }
             $isSensitive = null === $controller && preg_match(MpassLocalAuthGuard::MAIN_FIREWALL_PATH, $route->getPath()) // firewall-handled
                 || (null !== $class && class_exists($class) && preg_match($issuers, (string) file_get_contents((new \ReflectionClass($class))->getFileName())))
@@ -119,8 +119,8 @@ final class MpassLocalAuthGuardTest extends AbstractMpassTestCase
             }
         }
 
-        self::assertSame([], $unguarded, 'credential-setting or session-issuing routes that are neither gated nor allow-listed');
-        self::assertContains('fos_oauth_server_token', $sensitive, 'the inventory sees OAuth2 token minting');
+        $this->assertSame([], $unguarded, 'credential-setting or session-issuing routes that are neither gated nor allow-listed');
+        $this->assertContains('fos_oauth_server_token', $sensitive, 'the inventory sees OAuth2 token minting');
     }
 
     /**
@@ -144,18 +144,18 @@ final class MpassLocalAuthGuardTest extends AbstractMpassTestCase
 
         $response = $this->get($path, null, [], $method);
 
-        self::assertFalse(Response::HTTP_NOT_FOUND === $response->getStatusCode() && '' === $response->getContent(), "{$method} {$path} was refused by the SSO guard");
+        $this->assertFalse(Response::HTTP_NOT_FOUND === $response->getStatusCode() && '' === $response->getContent(), "{$method} {$path} was refused by the SSO guard");
     }
 
     // --- review findings 3 and 4 --------------------------------------------------------------
 
     public function testOauthAccessTokenParameterIsRefusedOnTheAdminUiUnderSso(): void
     {
-        self::assertSame(Response::HTTP_UNAUTHORIZED, $this->get('/s/account?access_token=x', null)->getStatusCode(), 'query');
+        $this->assertSame(Response::HTTP_UNAUTHORIZED, $this->get('/s/account?access_token=x', null)->getStatusCode(), 'query');
         $this->client->request('POST', '/s/account', ['access_token' => 'x']);
-        self::assertSame(Response::HTTP_UNAUTHORIZED, $this->client->getResponse()->getStatusCode(), 'body');
+        $this->assertSame(Response::HTTP_UNAUTHORIZED, $this->client->getResponse()->getStatusCode(), 'body');
         // (API v2 user routes answer 404 before any credential check: they are gated routes.)
-        self::assertSame(Response::HTTP_NOT_FOUND, $this->get('/api/v2/users', null, ['PHP_AUTH_USER' => 'admin', 'PHP_AUTH_PW' => 'Maut1cR0cks!'], 'POST')->getStatusCode(), 'API v2 user write');
+        $this->assertSame(Response::HTTP_NOT_FOUND, $this->get('/api/v2/users', null, ['PHP_AUTH_USER' => 'admin', 'PHP_AUTH_PW' => 'Maut1cR0cks!'], 'POST')->getStatusCode(), 'API v2 user write');
     }
 
     /**
@@ -171,21 +171,21 @@ final class MpassLocalAuthGuardTest extends AbstractMpassTestCase
             'API basic'  => $this->get('/api/v2/docs.json', null, ['PHP_AUTH_USER' => 'admin', 'PHP_AUTH_PW' => 'Maut1cR0cks!']),
             'token'      => $this->get('/oauth/v2/token', null, [], 'POST'),
         ] as $label => $response) {
-            self::assertFalse(in_array($response->getStatusCode(), [Response::HTTP_UNAUTHORIZED, Response::HTTP_NOT_FOUND], true) && '' === $response->getContent(), "{$label} was refused by the SSO guard");
+            $this->assertFalse(in_array($response->getStatusCode(), [Response::HTTP_UNAUTHORIZED, Response::HTTP_NOT_FOUND], true) && '' === $response->getContent(), "{$label} was refused by the SSO guard");
         }
     }
 
     public function testEncodedPathCannotSkipTheCredentialCheck(): void
     {
-        self::assertSame(Response::HTTP_UNAUTHORIZED, $this->get('/%73/account', null, ['HTTP_AUTHORIZATION' => 'Bearer x'])->getStatusCode());
-        self::assertSame(Response::HTTP_UNAUTHORIZED, $this->get('/%73/account?access_token=x', null)->getStatusCode());
+        $this->assertSame(Response::HTTP_UNAUTHORIZED, $this->get('/%73/account', null, ['HTTP_AUTHORIZATION' => 'Bearer x'])->getStatusCode());
+        $this->assertSame(Response::HTTP_UNAUTHORIZED, $this->get('/%73/account?access_token=x', null)->getStatusCode());
     }
 
     public function testBogusAccessTokensDoNotLockOutAnMpassLogin(): void
     {
         for ($i = 0; $i < 20; ++$i) {
             $this->client->getCookieJar()->clear();
-            self::assertSame(Response::HTTP_UNAUTHORIZED, $this->get('/s/account?access_token=bogus'.$i, null)->getStatusCode());
+            $this->assertSame(Response::HTTP_UNAUTHORIZED, $this->get('/s/account?access_token=bogus'.$i, null)->getStatusCode());
         }
 
         $this->client->getCookieJar()->clear();
@@ -208,12 +208,12 @@ final class MpassLocalAuthGuardTest extends AbstractMpassTestCase
             'role'      => (string) $this->memberRole->getId(),
         ]);
         $carol = $this->findUser('carol.new@example.com');
-        self::assertNotNull($carol, 'stored lowercase and trimmed');
-        self::assertSame('carol.new@example.com', $carol->getUserIdentifier());
+        $this->assertInstanceOf(User::class, $carol, 'stored lowercase and trimmed');
+        $this->assertSame('carol.new@example.com', $carol->getUserIdentifier());
 
         $this->restart();
         $this->submitWithExtras('/s/users/edit/'.$legacy->getId(), ['firstName' => 'Legacy']);
-        self::assertSame('legacy.user@example.com', $this->reload($legacy)->getEmail());
+        $this->assertSame('legacy.user@example.com', $this->reload($legacy)->getEmail());
     }
 
     public function testAuthorizationHeaderRefusedOnMainUnderSso(): void
@@ -222,8 +222,8 @@ final class MpassLocalAuthGuardTest extends AbstractMpassTestCase
 
         $response = $this->get('/s/account', 'alice@example.com', ['HTTP_AUTHORIZATION' => 'Bearer x']);
 
-        self::assertSame(Response::HTTP_UNAUTHORIZED, $response->getStatusCode());
-        self::assertNull($this->findUser('alice@example.com')->getLastLogin(), 'no authentication happened');
+        $this->assertSame(Response::HTTP_UNAUTHORIZED, $response->getStatusCode());
+        $this->assertNotInstanceOf(\DateTimeInterface::class, $this->findUser('alice@example.com')->getLastLogin(), 'no authentication happened');
     }
 
     public function testLogoutLinkIsPortalAndLogoutRouteClearsNothing(): void
@@ -231,15 +231,15 @@ final class MpassLocalAuthGuardTest extends AbstractMpassTestCase
         $this->restartWithEnv('LOGOUT_REDIRECT_URL', 'https://foss.example.test');
         $this->createUser('alice@example.com');
         $page = $this->get('/s/account', 'alice@example.com');
-        self::assertStringContainsString('href="https://foss.example.test"', (string) $page->getContent());
-        self::assertStringNotContainsString('/s/logout', (string) $page->getContent());
+        $this->assertStringContainsString('href="https://foss.example.test"', (string) $page->getContent());
+        $this->assertStringNotContainsString('/s/logout', (string) $page->getContent());
         $session = $this->sessionId();
 
         $response = $this->get('/s/logout', 'alice@example.com');
 
-        self::assertSame(Response::HTTP_FOUND, $response->getStatusCode());
-        self::assertSame('https://foss.example.test', $response->headers->get('Location'));
-        self::assertSame($session, $this->sessionId(), 'the session cookie is unchanged');
+        $this->assertSame(Response::HTTP_FOUND, $response->getStatusCode());
+        $this->assertSame('https://foss.example.test', $response->headers->get('Location'));
+        $this->assertSame($session, $this->sessionId(), 'the session cookie is unchanged');
         $this->assertServedAs('alice@example.com', $this->get('/s/account', null));
     }
 
@@ -254,11 +254,11 @@ final class MpassLocalAuthGuardTest extends AbstractMpassTestCase
             $this->restartWithEnv('LOGOUT_REDIRECT_URL', $url);
 
             $page = $this->get('/s/account', 'alice@example.com');
-            self::assertStringContainsString('/s/logout', (string) $page->getContent(), var_export($url, true));
+            $this->assertStringContainsString('/s/logout', (string) $page->getContent(), var_export($url, true));
 
             $response = $this->get('/s/logout', 'alice@example.com');
-            self::assertSame(Response::HTTP_OK, $response->getStatusCode(), var_export($url, true));
-            self::assertFalse($response->headers->has('Location'), var_export($url, true));
+            $this->assertSame(Response::HTTP_OK, $response->getStatusCode(), var_export($url, true));
+            $this->assertFalse($response->headers->has('Location'), var_export($url, true));
         }
     }
 
@@ -268,13 +268,13 @@ final class MpassLocalAuthGuardTest extends AbstractMpassTestCase
         $this->createUser('bob@example.com', published: false);
 
         $toApp = $this->get('/s/login', 'alice@example.com');
-        self::assertSame(Response::HTTP_FOUND, $toApp->getStatusCode());
-        self::assertStringEndsWith('/s/dashboard', (string) $toApp->headers->get('Location'));
+        $this->assertSame(Response::HTTP_FOUND, $toApp->getStatusCode());
+        $this->assertStringEndsWith('/s/dashboard', (string) $toApp->headers->get('Location'));
 
         $landing = $this->get('/s/login', null);
-        self::assertSame(Response::HTTP_OK, $landing->getStatusCode());
-        self::assertStringContainsString('data-reason="signin"', (string) $landing->getContent());
-        self::assertStringNotContainsString('_password', (string) $landing->getContent());
+        $this->assertSame(Response::HTTP_OK, $landing->getStatusCode());
+        $this->assertStringContainsString('data-reason="signin"', (string) $landing->getContent());
+        $this->assertStringNotContainsString('_password', (string) $landing->getContent());
 
         $this->client->getCookieJar()->clear();
         $this->get('/s/login', 'bob@example.com');
@@ -290,7 +290,7 @@ final class MpassLocalAuthGuardTest extends AbstractMpassTestCase
         $form    = $crawler->filter('form')->form(['_username' => 'admin', '_password' => 'Maut1cR0cks!', '_remember_me' => true]);
         $this->client->submit($form);
         $rememberMe = $this->client->getCookieJar()->get('REMEMBERME');
-        self::assertNotNull($rememberMe, 'precondition: a remember-me cookie was issued');
+        $this->assertInstanceOf(Cookie::class, $rememberMe, 'precondition: a remember-me cookie was issued');
 
         // Control: with SSO off the cookie alone restores admin.
         $this->client->getCookieJar()->clear();
@@ -304,14 +304,14 @@ final class MpassLocalAuthGuardTest extends AbstractMpassTestCase
         $this->client->getCookieJar()->set(new Cookie('REMEMBERME', $rememberMe->getValue()));
         $response = $this->get('/s/account', 'bob@example.com');
         $this->assertServedAs('bob@example.com', $response);
-        self::assertStringContainsString('REMEMBERME=deleted', implode("\n", $response->headers->all('set-cookie')));
+        $this->assertStringContainsString('REMEMBERME=deleted', implode("\n", $response->headers->all('set-cookie')));
 
         // And A's cookie with no header and no session is not honoured at all.
         $this->client->getCookieJar()->clear();
         $this->client->getCookieJar()->set(new Cookie('REMEMBERME', $rememberMe->getValue()));
         $response = $this->get('/s/account', null);
         $this->assertAnonymous($response);
-        self::assertStringContainsString('REMEMBERME=deleted', implode("\n", $response->headers->all('set-cookie')));
+        $this->assertStringContainsString('REMEMBERME=deleted', implode("\n", $response->headers->all('set-cookie')));
     }
 
     public function testRefusalsDoNotConsumeLoginThrottling(): void
@@ -350,8 +350,8 @@ final class MpassLocalAuthGuardTest extends AbstractMpassTestCase
 
         foreach ([$alice, $bob] as $user) {
             $fresh = $this->reload($user);
-            self::assertSame('unused', $fresh->getPassword(), $user->getEmail().' password unchanged');
-            self::assertSame($user->getEmail(), $fresh->getEmail(), $user->getEmail().' email unchanged');
+            $this->assertSame('unused', $fresh->getPassword(), $user->getEmail().' password unchanged');
+            $this->assertSame($user->getEmail(), $fresh->getEmail(), $user->getEmail().' email unchanged');
         }
     }
 
@@ -364,8 +364,8 @@ final class MpassLocalAuthGuardTest extends AbstractMpassTestCase
         // Claiming a colleague's email as username would block their first mPass login.
         $this->submitWithExtras('/s/account', ['username' => 'carol@example.com']);
         $this->submitWithExtras('/s/users/edit/'.$bob->getId(), ['username' => 'carol@example.com']);
-        self::assertSame('alice@example.com', $this->reload($alice)->getUserIdentifier());
-        self::assertSame('bob@example.com', $this->reload($bob)->getUserIdentifier());
+        $this->assertSame('alice@example.com', $this->reload($alice)->getUserIdentifier());
+        $this->assertSame('bob@example.com', $this->reload($bob)->getUserIdentifier());
 
         $this->restart();
         $this->submitWithExtras('/s/users/new', [
@@ -375,7 +375,7 @@ final class MpassLocalAuthGuardTest extends AbstractMpassTestCase
             'lastName'  => 'Example',
             'role'      => (string) $this->memberRole->getId(),
         ]);
-        self::assertSame('dave@example.com', $this->findUser('dave@example.com')?->getUserIdentifier());
+        $this->assertSame('dave@example.com', $this->findUser('dave@example.com')?->getUserIdentifier());
     }
 
     public function testProfileSaveStillWorksUnderSso(): void
@@ -385,7 +385,7 @@ final class MpassLocalAuthGuardTest extends AbstractMpassTestCase
 
         $this->submitWithExtras('/s/account', ['firstName' => 'Alicia']);
 
-        self::assertSame('Alicia', $this->reload($alice)->getFirstName());
+        $this->assertSame('Alicia', $this->reload($alice)->getFirstName());
     }
 
     public function testAdminCreateIgnoresSubmittedPassword(): void
@@ -401,20 +401,20 @@ final class MpassLocalAuthGuardTest extends AbstractMpassTestCase
             'role'      => (string) $this->memberRole->getId(),
         ];
         $known  = ['password' => 'Kn0wn-Passw0rd!', 'confirm' => 'Kn0wn-Passw0rd!'];
-        $hasher = static::getContainer()->get('security.user_password_hasher');
+        $hasher = self::getContainer()->get(\Symfony\Component\PasswordHasher\Hasher\UserPasswordHasherInterface::class);
 
         // A direct POST carrying a password: the field does not exist under SSO, so it never lands.
         $this->submitWithExtras('/s/users/new', $carol + ['plainPassword' => $known]);
         $created = $this->findUser('carol@example.com');
-        self::assertTrue(null === $created || !$hasher->isPasswordValid($created, $known['password']), 'the submitted password was not set');
+        $this->assertTrue(null === $created || !$hasher->isPasswordValid($created, $known['password']), 'the submitted password was not set');
 
         // The UI's own submit (no password field) pre-provisions the user with a random password.
         $this->restart();
         $this->submitWithExtras('/s/users/new', $carol);
         $created = $this->findUser('carol@example.com');
-        self::assertNotNull($created, 'pre-provisioning by email still works');
-        self::assertNotEmpty($created->getPassword());
-        self::assertFalse($hasher->isPasswordValid($created, $known['password']));
+        $this->assertInstanceOf(User::class, $created, 'pre-provisioning by email still works');
+        $this->assertNotEmpty($created->getPassword());
+        $this->assertFalse($hasher->isPasswordValid($created, $known['password']));
     }
 
     public function testAdminCreateWithArrayEmailDoesNotCrash(): void
@@ -424,7 +424,7 @@ final class MpassLocalAuthGuardTest extends AbstractMpassTestCase
 
         $this->submitWithExtras('/s/users/new', ['email' => ['x@example.com']]);
 
-        self::assertNull($this->findUser('x@example.com'));
+        $this->assertNotInstanceOf(User::class, $this->findUser('x@example.com'));
     }
 
     /**
@@ -437,7 +437,7 @@ final class MpassLocalAuthGuardTest extends AbstractMpassTestCase
     private function submitWithExtras(string $path, array $fields, array $dropFromRendered = []): void
     {
         $crawler = $this->client->request('GET', $path, [], [], ['HTTP_X_AUTH_REQUEST_EMAIL' => 'alice@example.com', 'HTTP_X_MPASS_EDGE_SECRET' => self::EDGE_SECRET]);
-        self::assertSame(Response::HTTP_OK, $this->client->getResponse()->getStatusCode(), $path);
+        $this->assertSame(Response::HTTP_OK, $this->client->getResponse()->getStatusCode(), $path);
         $values = $crawler->filter('form[name=user]')->form()->getPhpValues();
         foreach ($dropFromRendered as $name) {
             unset($values['user'][$name]);
@@ -446,7 +446,7 @@ final class MpassLocalAuthGuardTest extends AbstractMpassTestCase
         $values['user']['buttons']['save'] = '';
 
         $this->client->request('POST', $path, $values, [], ['HTTP_X_AUTH_REQUEST_EMAIL' => 'alice@example.com', 'HTTP_X_MPASS_EDGE_SECRET' => self::EDGE_SECRET]);
-        self::assertLessThan(500, $this->client->getResponse()->getStatusCode(), "POST {$path} must not crash");
+        $this->assertLessThan(500, $this->client->getResponse()->getStatusCode(), "POST {$path} must not crash");
     }
 
     private function assertHitsRecorded(int $expected, string $message): void
@@ -454,7 +454,7 @@ final class MpassLocalAuthGuardTest extends AbstractMpassTestCase
         $table  = MAUTIC_TABLE_PREFIX.'page_hits';
         $before = (int) $this->connection->fetchOne("SELECT COUNT(*) FROM {$table}");
         $this->get('/mtracking.gif', null);
-        self::assertSame(Response::HTTP_OK, $this->client->getResponse()->getStatusCode());
-        self::assertSame($expected, (int) $this->connection->fetchOne("SELECT COUNT(*) FROM {$table}") - $before, $message);
+        $this->assertSame(Response::HTTP_OK, $this->client->getResponse()->getStatusCode());
+        $this->assertSame($expected, (int) $this->connection->fetchOne("SELECT COUNT(*) FROM {$table}") - $before, $message);
     }
 }

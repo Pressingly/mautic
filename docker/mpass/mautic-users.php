@@ -1,5 +1,9 @@
 <?php
 
+use Mautic\UserBundle\Entity\Permission;
+use Mautic\UserBundle\Entity\Role;
+use Mautic\UserBundle\Entity\User;
+
 // Mautic user/role admin for mPass SSO (no one has a password, so admins are managed here).
 // Baked into the image at /opt/mautic-users.php; run it as www-data in the mautic container:
 //   docker compose exec -u www-data mautic php /opt/mautic-users.php <command> [args]
@@ -9,10 +13,6 @@
 //   ensure-member-role                     create "mPass Member" (marketer) if missing; print its id
 //   grant-admin <email>...                 give the admin role (pre-creates the user if needed)
 //   revoke-admin <email>...                back to the SSO default role (MPASS_SSO_DEFAULT_ROLE)
-
-use Mautic\UserBundle\Entity\Permission;
-use Mautic\UserBundle\Entity\Role;
-use Mautic\UserBundle\Entity\User;
 
 define('IN_MAUTIC_CONSOLE', 1);
 define('MAUTIC_ROOT_DIR', '/var/www/html');
@@ -111,10 +111,10 @@ switch ($cmd) {
         }
         break;
 
-    // Run by the entrypoint at every SSO boot. Creates the SSO default role with the
-    // regular-member (marketer) set on first run only; later runs never touch
-    // permissions an admin may have changed in the UI.
     case 'ensure-member-role':
+        // Run by the entrypoint at every SSO boot. Creates the SSO default role with the
+        // regular-member (marketer) set on first run only; later runs never touch
+        // permissions an admin may have changed in the UI.
         $role = $em->getRepository(Role::class)->findOneBy(['name' => MEMBER_ROLE]);
         if (!$role) {
             $role = (new Role())
@@ -136,7 +136,7 @@ switch ($cmd) {
 
     case 'member-perms':
         $set = $args[0] ?? '';
-        isset($permSets[$set]) or exit("usage: member-perms <".implode('|', array_keys($permSets)).">\n");
+        isset($permSets[$set]) or exit('usage: member-perms <'.implode('|', array_keys($permSets)).">\n");
         $role = memberRole($em);
         $em->getRepository(Permission::class)->purgeRolePermissions($role);
         $em->refresh($role);

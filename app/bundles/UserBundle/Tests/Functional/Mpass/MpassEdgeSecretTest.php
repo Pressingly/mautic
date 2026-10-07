@@ -13,11 +13,11 @@ final class MpassEdgeSecretTest extends AbstractMpassTestCase
 {
     public function testSysinfoRendersNoPhpinfoUnderSso(): void
     {
-        $phpInfo = (string) static::getContainer()->get(SysinfoModel::class)->getPhpInfo();
+        $phpInfo = (string) self::getContainer()->get(SysinfoModel::class)->getPhpInfo();
 
-        self::assertStringContainsString(PHP_VERSION, $phpInfo, 'the version line only');
-        self::assertStringNotContainsString('<table', $phpInfo, 'no phpinfo() tables');
-        self::assertStringNotContainsString(self::EDGE_SECRET, $phpInfo);
+        $this->assertStringContainsString(PHP_VERSION, $phpInfo, 'the version line only');
+        $this->assertStringNotContainsString('<table', $phpInfo, 'no phpinfo() tables');
+        $this->assertStringNotContainsString(self::EDGE_SECRET, $phpInfo);
     }
 
     public function testSysinfoPageDoesNotContainTheEdgeSecret(): void
@@ -25,8 +25,8 @@ final class MpassEdgeSecretTest extends AbstractMpassTestCase
         $this->createUser('alice@example.com'); // admin role
         $response = $this->get('/s/sysinfo', 'alice@example.com');
 
-        self::assertSame(200, $response->getStatusCode());
-        self::assertStringNotContainsString(self::EDGE_SECRET, (string) $response->getContent());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertStringNotContainsString(self::EDGE_SECRET, (string) $response->getContent());
     }
 
     public function testEdgeSecretIsReadFromTheFileTheImageWrites(): void
@@ -41,7 +41,7 @@ final class MpassEdgeSecretTest extends AbstractMpassTestCase
             $this->assertServedAs('alice@example.com', $this->get('/s/account', 'alice@example.com'));
 
             $this->client->getCookieJar()->clear();
-            self::assertSame(403, $this->get('/s/account', 'alice@example.com', ['HTTP_X_MPASS_EDGE_SECRET' => 'wrong'])->getStatusCode());
+            $this->assertSame(403, $this->get('/s/account', 'alice@example.com', ['HTTP_X_MPASS_EDGE_SECRET' => 'wrong'])->getStatusCode());
         } finally {
             unlink($file);
         }
