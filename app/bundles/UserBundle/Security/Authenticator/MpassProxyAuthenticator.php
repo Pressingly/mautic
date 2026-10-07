@@ -198,7 +198,8 @@ final class MpassProxyAuthenticator extends AbstractAuthenticator implements Int
         $user->setEmail($email);
         $user->setUsername($email);
         // Mautic requires a last name, and the identity has none: a neutral filler, not the
-        // email domain. Users edit both in their profile (doc/mpass_sso.md).
+        // email domain. Set here, at creation only, and never on later logins, so names users
+        // edit in Account settings stick (doc/mpass_sso.md).
         $user->setFirstName($local);
         $user->setLastName('-');
         $user->setRole($role);

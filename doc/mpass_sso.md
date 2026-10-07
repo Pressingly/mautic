@@ -82,13 +82,15 @@ address and never follows redirects.
   `MPASS_ALLOW_ANY_TENANT=1`, and the image refuses to start. Reason: Mautic holds the contact
   database, and an empty variable silently admitting the whole Cognito pool is the easy mistake.
   Cost: on a non-corporate deployment, Layer 2 must set `MPASS_ALLOW_ANY_TENANT=1`.
-- **Last name is the email domain.** Mautic requires both name fields. A new user gets the email's
-  local part as first name and its domain as last name, so a bare-id user shows as
-  `1020010000019120 askii.ai`. Users can edit both in their profile.
+- **Last name is a filler.** Mautic requires both name fields, and the mPass identity carries no
+  name. A new user gets the part of the email before `@` as first name and `-` as last name, so a
+  bare-id user shows as `1020010000019120 -`. Names are set only at creation; users edit both in
+  Account settings, and later logins keep the edit.
 - **No password for anyone.** SSO users get a random, discarded password. The install admin is a
   placeholder (`mautic-install@admin.invalid`) whose password is discarded too. Admins come only
   from `/opt/mautic-users.php grant-admin`.
-- **Upstream footprint.** About 180 changed lines across 11 upstream files (largest:
+- **Upstream footprint.** About 210 changed lines across 13 upstream files, two of them upstream
+  tests updated for the guard and the outbound guard (largest:
   `UserController.php`, which drops password and email fields under SSO). Moving that into a form
   extension would make rebases cheaper; not done yet.
 
@@ -100,7 +102,8 @@ address and never follows redirects.
   `strpos`-based, never a regex.
 - Lookup is an exact match on `users.email`, never Mautic's `username OR email` user provider.
 - A new user's first name is the part of the email before `@` (the mPass id for a bare value);
-  the last name, which Mautic requires, is a `-` filler. Users edit both in their profile.
+  the last name, which Mautic requires, is a `-` filler. Both are set only when the user is
+  created and never on later logins, so names a user edits in Account settings stick.
 - A new user gets the default role (above), never an admin role; an existing user is never
   re-roled. A missing, admin or unpublished default role refuses the login (`403` page, no user
   created).

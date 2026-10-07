@@ -105,6 +105,27 @@ final class MpassProxyAuthenticatorTest extends AbstractMpassTestCase
         $this->assertInstanceOf(\DateTimeInterface::class, $user->getLastLogin(), 'InteractiveLoginEvent fired');
     }
 
+    public function testNamesAreSetOnlyAtCreationSoProfileEditsStick(): void
+    {
+        $this->get('/s/account', 'newcomer@example.com');
+        // The user edits their names in Account settings.
+        $this->connection->executeStatement(
+            'UPDATE '.MAUTIC_TABLE_PREFIX."users SET first_name = 'Edited', last_name = 'Name' WHERE email = 'newcomer@example.com'"
+        );
+        // A real login request starts with no loaded entities; the test kernel keeps them.
+        self::getContainer()->get(\Doctrine\ORM\EntityManagerInterface::class)->clear();
+
+        // Switching away and back re-runs authenticate() for the same identity.
+        $this->createUser('bob@example.com');
+        $this->assertServedAs('bob@example.com', $this->get('/s/account', 'bob@example.com'));
+        $this->assertServedAs('newcomer@example.com', $this->get('/s/account', 'newcomer@example.com'));
+
+        $this->assertSame(
+            ['first_name' => 'Edited', 'last_name' => 'Name'],
+            $this->connection->fetchAssociative('SELECT first_name, last_name FROM '.MAUTIC_TABLE_PREFIX."users WHERE email = 'newcomer@example.com'")
+        );
+    }
+
     public function testRolePermissionsApplyOnTheFirstRequest(): void
     {
         $role = $this->em->find(Role::class, $this->memberRole->getId());

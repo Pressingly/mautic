@@ -17,14 +17,15 @@ Setup: `AUTH_TYPE=SSO`, `DEFAULT_EMAIL_DOMAIN` set, `LOGOUT_REDIRECT_URL=https:/
 | # | Step | Pass |
 |---|---|---|
 | 1 | Open `https://HOST/s/dashboard` | QR page; after scanning, the dashboard as your mPass identity. No password form, no installer |
-| 2 | `users list` | One row for you, role `mPass Member`, not admin. Name: local part + domain |
+| 2 | `users list` | One row for you, role `mPass Member`, not admin. Name: the part of your email before `@` as first name, `-` as last name |
 | 3 | Open `https://HOST/s/dashboard` again in a new tab | Dashboard, no login page |
 | 4 | Account settings, and Users > edit yourself as an admin | No password fields; email and username can't be changed |
+| 4b | Change your first and last name in Account settings, "Log out of all apps", log in again | The edited names are kept |
 | 5 | Logout in the user menu | Lands on `https://PORTAL`. Opening `HOST/s/dashboard` again logs you straight back in |
 | 6 | Portal "Log out of all apps", then reload an open Mautic tab and wait for the keep-alive | The tab goes to the QR page |
 | 7 | Log in as A, "Log out of all apps", log in as B, reload the open Mautic tab | Served as B, never A |
 | 8 | `users grant-admin <your email>`, reload | Admin menu appears. `users revoke-admin <your email>` takes it away |
-| 9 | Publish a landing page and a form; open the page and submit the form in a window with no mPass session | Both work without a login |
+| 9 | Publish a landing page and a form; open the page and submit the form in a window with no mPass session. Then embed the form "via iframe" (`<iframe src="https://HOST/form/<id>">`) in a local HTML page and submit it there | Both work without a login, including inside the iframe |
 
 ## With curl
 
