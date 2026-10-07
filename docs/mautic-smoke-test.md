@@ -36,15 +36,16 @@ Setup: `AUTH_TYPE=SSO`, `DEFAULT_EMAIL_DOMAIN` set, `LOGOUT_REDIRECT_URL=https:/
 | 13 | Without a cookie: `/robots.txt`, `/mtc.js`, `/mtracking.gif`, `/form/generate.js?id=1`, `/<landing page slug>`, `/dwc/<alias>`, `/focus/1.js`, `/email/view/<hash>` | Reach Mautic (no redirect to mPass) |
 | 14 | Without a cookie: `/s/login`, `/s/users`, `/index.php/s/dashboard`, `/installer`, `/elfinder` | `302` to the mPass login |
 | 15 | With the `_oauth2_proxy` cookie: `POST /passwordreset`, `GET /invite/x`, `GET /s/saml/login`, `GET /oauth/v2/authorize_login`, `POST /api/users/new`, `GET /installer` | `404` for every one |
-| 16 | API enabled in Configuration, an API client with client credentials: `POST /oauth/v2/token` (`grant_type=client_credentials`), then `GET /api/contacts` with the token | Token issued, contacts returned, no mPass session involved |
+| 16a | Without a cookie, through the edge: `POST https://HOST/oauth/v2/token` and `GET https://HOST/api/contacts` | `302` to the mPass login for both (the API is internal-only) |
+| 16b | API enabled in Configuration, an API client with client credentials. From inside the network (`docker compose exec mautic curl …` against `http://mautic`): `POST /oauth/v2/token` (`grant_type=client_credentials`), then `GET /api/contacts` with the token | Token issued, contacts returned, no mPass session involved |
 | 17 | With the `_oauth2_proxy` cookie: `GET /s/dashboard` with `Authorization: Bearer x` | `401` |
-| 18 | `curl -skI https://HOST/s/dashboard` with the cookie | `Strict-Transport-Security`, `X-Frame-Options`, `X-Content-Type-Options: nosniff`, `Referrer-Policy` present |
+| 18 | `curl -skI https://HOST/s/dashboard` with the cookie; then, without one, `curl -skI https://HOST/form/embed/<id>` and a landing page | Admin UI: `Strict-Transport-Security`, `X-Frame-Options: SAMEORIGIN`, `X-Content-Type-Options: nosniff`, `Referrer-Policy` present. Form and landing page: the same, but no `X-Frame-Options` (they are framed on customer sites) |
 
 ## Configuration failures
 
 | # | Change, then `docker compose up -d` the Mautic service | Pass |
 |---|---|---|
-| 19 | Unset `DEFAULT_EMAIL_DOMAIN` (the devkit sends a bare mPass id) | Login refused with the mPass refusal page (`unresolvable`); no user created |
+| 19 | Set `DEFAULT_EMAIL_DOMAIN` to empty (`DEFAULT_EMAIL_DOMAIN=` in the devkit's `.env`; the devkit sends a bare mPass id) | Login refused with the mPass refusal page (`unresolvable`); no user created |
 | 20 | Set `SMB_CORPORATE_ID` to a value your account doesn't have (on the app only) | `403` refusal page (`corporate`), no user created; an open session is flushed |
 | 21 | Unset both `SMB_CORPORATE_ID` and `MPASS_ALLOW_ANY_TENANT` | The container refuses to start and names both variables |
 | 22 | Set `MPASS_EDGE_SECRET=short` | The container refuses to start |

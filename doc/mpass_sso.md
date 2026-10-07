@@ -14,7 +14,7 @@ QR login and comes back. Requests that reach Mautic carry the user's identity in
 `X-Auth-Request-*` headers.
 
 ```text
-browser ──> traefik ──(ForwardAuth, admin UI only)──> oauth2-proxy ──> mpass-auth-proxy ──> Cognito
+browser ──> traefik ──(ForwardAuth, admin UI and API)──> oauth2-proxy ──> mpass-auth-proxy ──> Cognito
                │
                └─ request + X-Auth-Request-* ──> mautic (MpassProxyAuthenticator on the `main` firewall)
 ```
@@ -99,6 +99,8 @@ address and never follows redirects.
   after it is used as is; a bare value becomes `<value>@${DEFAULT_EMAIL_DOMAIN}`. The check is
   `strpos`-based, never a regex.
 - Lookup is an exact match on `users.email`, never Mautic's `username OR email` user provider.
+- A new user's first name is the part of the email before `@` (the mPass id for a bare value);
+  the last name, which Mautic requires, is a `-` filler. Users edit both in their profile.
 - A new user gets the default role (above), never an admin role; an existing user is never
   re-roled. A missing, admin or unpublished default role refuses the login (`403` page, no user
   created).
@@ -127,13 +129,18 @@ session without being gated or listed.
 
 ## REST API and OAuth2
 
-API keys and OAuth clients keep working under SSO: `/api/*` and `/oauth/v2/token` are left to
-Mautic's own `api` firewall, with no identity headers involved. Whether the API is on is the
+Under SSO the API is internal-only, the platform standard for every app. On the public host
+`/api/*` and `/oauth/v2/*` are behind `mpass-auth` (the `mautic-secure` router), so they need an
+mPass session like the admin UI. API-token clients, such as MCP servers, call Mautic over the
+internal network instead (`http://mautic` on the backend network), where Mautic's own `api`
+firewall authenticates them with no identity headers involved. Whether the API is on is the
 admin's Configuration setting (`api_enabled`, default off); the image does not override it.
-Mautic's OAuth clients allow the authorization-code, refresh-token and client-credentials grants,
-never a password grant. The authorization-code flow needs a login on its password form, which is
-gated, so integrations use client credentials (or basic auth, if an admin enables it; SSO users
-have no usable password).
+
+Only the client-credentials grant works. Mautic's OAuth clients allow the authorization-code,
+refresh-token and client-credentials grants, never a password grant, but the authorization-code
+flow cannot be used under SSO: `/oauth/v2/authorize` sends the user to `authorize_login`, its
+password form, which returns `404` (`MpassLocalAuthGuard::GATED_ROUTES`). Basic auth also works
+if an admin enables it, but SSO users have no usable password.
 
 ## Session lifetime
 
@@ -160,8 +167,13 @@ pages are a catch-all slug (`/{slug}`) and cannot be allow-listed:
 
 | Router | Rule | Middlewares |
 |---|---|---|
-| `mautic-secure` | `PathRegexp(^(/index\.php)?/(s(/\|$)\|elfinder\|efconnect\|installer))`, priority 20 | `strip-auth-headers`, `security-headers`, `mpass-auth` (+ the edge-secret injector when used) |
-| `mautic-public` | everything else on the host, priority 10 | `strip-auth-headers`, `security-headers` (+ the edge-secret strip when used) |
+| `mautic-secure` | `PathRegexp(^(/index\.php)?/(s(/\|$)\|elfinder\|efconnect\|installer\|api(/\|$)\|oauth(/\|$)))`, priority 20 | `strip-auth-headers`, `security-headers`, `mpass-auth` (+ the edge-secret injector when used) |
+| `mautic-public` | everything else on the host, priority 10 | `strip-auth-headers`, `mautic-public-headers` (+ the edge-secret strip when used) |
+
+`mautic-public-headers` is the devkit's `security-headers` set without `X-Frame-Options`. Public
+forms are embedded "via iframe" (`/form/{id}`, `/form/embed/{id}`) and landing pages may be framed
+on customer sites; `SAMEORIGIN` would break both, and Mautic sends no frame header of its own. The
+admin UI keeps `SAMEORIGIN`.
 
 Protected, and why:
 
@@ -170,6 +182,7 @@ Protected, and why:
 | `/s/*` | The admin UI (`main` firewall), including `/s/keep-alive` and every admin XHR |
 | `/elfinder*`, `/efconnect*` | The file manager, also on the `main` firewall |
 | `/installer*` | 404 under SSO anyway; never public |
+| `/api/*`, `/oauth/v2/*` | REST API and OAuth2: internal-only under SSO (see "REST API and OAuth2") |
 | `/index.php/` twins of the above | Same routes through the front controller |
 
 Public, and why (all anonymous by construction, since identity headers are stripped):
@@ -184,7 +197,6 @@ Public, and why (all anonymous by construction, since identity headers are strip
 | `/r/*`, `/redirect/*`, `/asset/*` | Tracked links and public assets |
 | `/mailer/callback`, `/sms/{transport}/callback`, `/sms/receive`, `/notification/*` | ESP bounce/complaint webhooks, SMS callbacks, push subscriptions |
 | `/plugin/{integration}/tracking.gif`, `/social/generate/{formName}.js`, `/integration/{integration}/callback` | Plugin tracking, social-login forms, integration OAuth callbacks |
-| `/api/*`, `/oauth/v2/*` | REST API and OAuth2 token endpoint, authenticated by Mautic's `api` firewall |
 | `/media/*`, `/themes/*/assets/*`, `/app/assets/*`, `/favicon.ico`, `/robots.txt` | Static assets |
 
 **Residual.** If Traefik and Mautic ever disagree about whether a path is the admin UI (an

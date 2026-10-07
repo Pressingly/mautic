@@ -192,15 +192,15 @@ final class MpassProxyAuthenticator extends AbstractAuthenticator implements Int
     private function provision(string $email): User
     {
         $role = $this->defaultRole();
-        [$local, $domain] = explode('@', $email, 2);
+        $local = strstr($email, '@', true);
 
         $user = new User();
         $user->setEmail($email);
         $user->setUsername($email);
-        // Mautic requires a last name; the email domain is the only other part of the identity.
-        // Users edit both in their profile (doc/mpass_sso.md).
+        // Mautic requires a last name, and the identity has none: a neutral filler, not the
+        // email domain. Users edit both in their profile (doc/mpass_sso.md).
         $user->setFirstName($local);
-        $user->setLastName($domain);
+        $user->setLastName('-');
         $user->setRole($role);
         $user->setIsPublished(true);
         $user->setPassword($this->userModel->checkNewPassword($user, EncryptionHelper::generateKey()));

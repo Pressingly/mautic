@@ -46,8 +46,9 @@ final readonly class MpassLocalAuthGuard implements EventSubscriberInterface
         'mautic_saml_login_retry',
         'mautic_sso_login',
         'mautic_sso_login_check',
-        // The OAuth2 authorize flow's password form. /oauth/v2/token and /oauth/v2/authorize stay
-        // open for API clients (the `api` firewall); clients allow no password grant.
+        // The OAuth2 authorize flow's password form, so the authorization-code grant cannot be
+        // used under SSO (/oauth/v2/authorize lands here). /oauth/v2/token stays open for
+        // client_credentials (the `api` firewall); clients allow no password grant.
         'mautic_oauth2_server_auth_login',
         'mautic_oauth2_server_auth_login_check',
     ];

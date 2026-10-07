@@ -98,7 +98,7 @@ final class MpassProxyAuthenticatorTest extends AbstractMpassTestCase
         $this->assertInstanceOf(\Mautic\UserBundle\Entity\User::class, $user);
         $this->assertSame('newcomer@example.com', $user->getUserIdentifier());
         $this->assertSame('newcomer', $user->getFirstName());
-        $this->assertSame('example.com', $user->getLastName());
+        $this->assertSame('-', $user->getLastName());
         $this->assertSame($this->memberRole->getId(), $user->getRole()->getId());
         $this->assertTrue($user->isPublished());
         $this->assertNotEmpty($user->getPassword());
@@ -135,7 +135,7 @@ final class MpassProxyAuthenticatorTest extends AbstractMpassTestCase
         $user = $this->findUser('1020010000019120@corp.example');
         $this->assertInstanceOf(\Mautic\UserBundle\Entity\User::class, $user);
         $this->assertSame('1020010000019120', $user->getFirstName());
-        $this->assertSame('corp.example', $user->getLastName());
+        $this->assertSame('-', $user->getLastName());
         $this->assertNotInstanceOf(\Mautic\UserBundle\Entity\User::class, $this->findUser($sub));
     }
 

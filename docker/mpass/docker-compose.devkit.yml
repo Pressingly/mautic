@@ -23,9 +23,10 @@
 #     <list | member-perms <marketer|contributor|viewer|none> | grant-admin <email>... | revoke-admin <email>...>
 # grant-admin works before the person's first login; it is the only way to get admin.
 #
-# Routing (doc/mpass_sso.md §"ForwardAuth bypass list"): only the admin UI and the
-# installer are behind mpass-auth; everything else is Mautic's public surface (landing
-# pages, tracking, forms, email links, callbacks, /api, /oauth/v2). Every router strips
+# Routing (doc/mpass_sso.md §"ForwardAuth bypass list"): the admin UI, the installer and
+# the API (/api, /oauth/v2) are behind mpass-auth; API clients call http://mautic on the
+# backend network instead. Everything else is Mautic's public surface (landing pages,
+# tracking, forms, email links, callbacks), framable on customer sites. Every router strips
 # client identity headers, so a public route is always anonymous.
 # =============================================================================
 
@@ -64,7 +65,7 @@ services:
     environment:
       # Read by the fork at runtime (never written to a Mautic config file).
       AUTH_TYPE: SSO
-      DEFAULT_EMAIL_DOMAIN: ${DEFAULT_EMAIL_DOMAIN:-askii.ai}
+      DEFAULT_EMAIL_DOMAIN: ${DEFAULT_EMAIL_DOMAIN}
       SMB_CORPORATE_ID: ${SMB_CORPORATE_ID:-}
       # Dev only: this kit leaves SMB_CORPORATE_ID empty, which admits every
       # principal in the Cognito pool. The image refuses that under SSO unless
@@ -101,10 +102,11 @@ services:
       - traefik.http.middlewares.mautic-edge-secret.headers.customrequestheaders.X-Mpass-Edge-Secret=${MPASS_EDGE_SECRET:-}
       - traefik.http.middlewares.mautic-strip-edge-secret.headers.customrequestheaders.X-Mpass-Edge-Secret=
 
-      # Protected: the admin UI (the `main` firewall: /s/, elfinder, efconnect) and
-      # the installer, also through the /index.php/ front controller. Strip client
-      # identity headers, authenticate, then add the edge secret.
-      - traefik.http.routers.mautic-secure.rule=Host(`mautic.${PLATFORM_DOMAIN}`) && PathRegexp(`^(/index\.php)?/(s(/|$$)|elfinder|efconnect|installer)`)
+      # Protected: the admin UI (the `main` firewall: /s/, elfinder, efconnect), the
+      # installer, and the API (/api, /oauth/v2: internal-only, per the platform standard),
+      # also through the /index.php/ front controller. Strip client identity headers,
+      # authenticate, then add the edge secret.
+      - traefik.http.routers.mautic-secure.rule=Host(`mautic.${PLATFORM_DOMAIN}`) && PathRegexp(`^(/index\.php)?/(s(/|$$)|elfinder|efconnect|installer|api(/|$$)|oauth(/|$$))`)
       - traefik.http.routers.mautic-secure.entrypoints=websecure
       - traefik.http.routers.mautic-secure.service=mautic
       - traefik.http.routers.mautic-secure.priority=20
@@ -116,7 +118,16 @@ services:
       - traefik.http.routers.mautic-public.entrypoints=websecure
       - traefik.http.routers.mautic-public.service=mautic
       - traefik.http.routers.mautic-public.priority=10
-      - traefik.http.routers.mautic-public.middlewares=strip-auth-headers@docker,mautic-strip-edge-secret@docker,security-headers@docker
+      - traefik.http.routers.mautic-public.middlewares=strip-auth-headers@docker,mautic-strip-edge-secret@docker,mautic-public-headers@docker
+      # Not security-headers@docker: its X-Frame-Options: SAMEORIGIN breaks forms embedded
+      # "via iframe" (/form/{id}, /form/embed/{id}) and framed landing pages on customer
+      # sites, and Mautic sends no frame header of its own. The rest of the set is kept;
+      # the admin UI router above keeps SAMEORIGIN.
+      - traefik.http.middlewares.mautic-public-headers.headers.stsSeconds=31536000
+      - traefik.http.middlewares.mautic-public-headers.headers.stsIncludeSubdomains=true
+      - traefik.http.middlewares.mautic-public-headers.headers.contentTypeNosniff=true
+      - traefik.http.middlewares.mautic-public-headers.headers.referrerPolicy=strict-origin-when-cross-origin
+      - traefik.http.middlewares.mautic-public-headers.headers.permissionsPolicy=camera=(), microphone=(), geolocation=(), payment=(), usb=()
 
 volumes:
   mautic-db-data:
