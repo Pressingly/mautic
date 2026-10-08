@@ -253,7 +253,7 @@ docker buildx build --platform linux/amd64 -t <registry>/mautic:<tag> --push .
 | Process | Command | Notes |
 |---|---|---|
 | web | default (`apache2-foreground`) | Port 80 on the backend/frontend networks; never published |
-| cron | `mautic-entrypoint php bin/console <command>` | Same image, volumes and **SSO environment** as web (so the outbound guard is on for cron-fired webhooks). Runs as www-data; needs the web container to have installed first. Typical: `mautic:segments:update`, `mautic:campaigns:update`, `mautic:campaigns:trigger`, `mautic:messages:send`, `mautic:emails:send`, `mautic:broadcasts:send`, `mautic:import`, `mautic:webhooks:process` |
+| cron | `mautic-entrypoint php bin/console <command>` | Same image, volumes and **SSO environment** as web (so the outbound guard is on for cron-fired webhooks). Runs as www-data; needs the web container to have installed first. The bundle's `mautic-cron` runs these serially every 300s: `mautic:segments:update`, `mautic:campaigns:update` (alias of `mautic:campaigns:rebuild`), `mautic:campaigns:trigger`, `mautic:messages:send`, `mautic:broadcasts:send`, `mautic:import`, `mautic:webhooks:process`. Email is sent synchronously (`messenger_dsn_email` defaults to `sync://`), so there is no queue worker. Share `/var/www/html/var/import` with web: imports are uploaded there and run here |
 
 **Health check:** built into the image (`GET http://127.0.0.1/robots.txt` from inside the
 container). From the edge, `/robots.txt` is on the public router.
