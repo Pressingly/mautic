@@ -1,0 +1,23 @@
+{# mPass SSO landing and refusal page. Static on purpose: it starts no session and never redirects,
+   so a refused identity cannot loop back into authentication. #}
+{% set messages = {
+    'signin':       'Sign in through mPass. Open Mautic from your portal.',
+    'logout':       'To end your session, use "Logout all" on the portal.',
+    'unresolvable': 'Your mPass identity could not be mapped to an email address. Contact your administrator.',
+    'corporate':    'Your mPass account is not a member of the organisation this Mautic instance belongs to.',
+    'inactive':     'Your Mautic user is disabled. Contact your administrator.',
+    'role':         'Mautic cannot create your user: no default role is configured. Contact your administrator.',
+    'conflict':     'Another Mautic user already holds your email address as a username. Contact your administrator.',
+} %}
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>Mautic — mPass</title>
+</head>
+<body style="font-family: sans-serif; max-width: 40em; margin: 100px auto; text-align: center;">
+    <h1>Mautic</h1>
+    <p id="mpass-reason" data-reason="{{ reason }}">{{ messages[reason] ?? 'Mautic could not sign you in through mPass. Contact your administrator.' }}</p>
+</body>
+</html>

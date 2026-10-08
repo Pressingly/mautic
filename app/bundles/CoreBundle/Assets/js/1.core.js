@@ -13,6 +13,50 @@ if (!String.prototype.startsWith) {
 //set default ajax options
 MauticVars.activeRequests = 0;
 
+// mPass SSO (G13b): once the mPass session is gone, ForwardAuth rejects every XHR before it reaches
+// Mautic (401, or a cross-origin redirect that jQuery reports as status 0). Reload the tab so the
+// top-level request goes through ForwardAuth into the mPass login. 403 is Mautic's own permission
+// denial and never triggers a reload. At most one reload per 30 s, so an outage cannot loop.
+// Status 0 also means "cancelled by navigation" or "timed out": neither reloads, or a click on
+// Logout/a download while an XHR is in flight would be replaced by a reload of this page.
+// Only same-origin requests count (the gateway sits in front of this origin only; a third-party
+// endpoint failing says nothing about the mPass session), and never while the browser is offline.
+MauticVars.mpassShouldReload = function (status, statusText, now, lastReload, unloading, crossDomain, offline) {
+    if (unloading || crossDomain || offline) {
+        return false;
+    }
+    if (!(401 === status || (0 === status && 'abort' !== statusText && 'timeout' !== statusText))) {
+        return false;
+    }
+
+    return now - lastReload >= 30000;
+};
+
+if (typeof mauticMpassSso !== 'undefined' && mauticMpassSso) {
+    var mpassUnloading = false;
+    window.addEventListener('beforeunload', function () {
+        mpassUnloading = true;
+        // A download fires beforeunload but leaves the page in place.
+        setTimeout(function () { mpassUnloading = false; }, 5000);
+    });
+    mQuery(document).ajaxError(function (event, jqXHR, settings) {
+        var key = 'mauticMpassReloadAt';
+        var now = Date.now();
+        try {
+            var last = parseInt(window.sessionStorage.getItem(key), 10) || 0;
+            var crossDomain = !!(settings && settings.crossDomain);
+            var offline     = !!(window.navigator && false === window.navigator.onLine);
+            if (!MauticVars.mpassShouldReload(jqXHR.status, jqXHR.statusText, now, last, mpassUnloading, crossDomain, offline)) {
+                return;
+            }
+            window.sessionStorage.setItem(key, String(now));
+        } catch (e) {
+            return; // no sessionStorage, no loop guard: do not reload
+        }
+        window.location.reload();
+    });
+}
+
 mQuery.ajaxSetup({
     beforeSend: function (request, settings) {
         if (settings.showLoadingBar) {

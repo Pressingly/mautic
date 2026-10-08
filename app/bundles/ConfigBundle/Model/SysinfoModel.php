@@ -8,6 +8,7 @@ use Mautic\CoreBundle\Helper\PathsHelper;
 use Mautic\CoreBundle\Loader\ParameterLoader;
 use Mautic\InstallBundle\Configurator\Step\CheckStep;
 use Mautic\InstallBundle\Install\InstallService;
+use Mautic\UserBundle\Security\Mpass\ProxyIdentity;
 use Symfony\Contracts\Translation\TranslatorInterface;
 
 final class SysinfoModel
@@ -29,6 +30,7 @@ final class SysinfoModel
         private readonly Connection $connection,
         private readonly InstallService $installService,
         private readonly CheckStep $checkStep,
+        private readonly ProxyIdentity $mpass, // fork: mPass SSO only
     ) {
     }
 
@@ -43,7 +45,11 @@ final class SysinfoModel
             return $this->phpInfo;
         }
 
-        if (function_exists('phpinfo') && 'cli' !== PHP_SAPI) {
+        // Under mPass SSO no phpinfo(): under mod_php its module section lists the request headers
+        // (the edge secret Traefik injects) and the Apache environment. Version line only.
+        if ($this->mpass->isSso()) {
+            $this->phpInfo = $this->translator->trans('mautic.sysinfo.phpinfo.phpversion', ['%phpversion%' => PHP_VERSION]);
+        } elseif (function_exists('phpinfo') && 'cli' !== PHP_SAPI) {
             ob_start();
             $currentTz = date_default_timezone_get();
             date_default_timezone_set('UTC');

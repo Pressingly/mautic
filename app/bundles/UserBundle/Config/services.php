@@ -56,6 +56,34 @@ return function (ContainerConfigurator $configurator): void {
             '$oAuth2' => service('fos_oauth_server.server'),
         ]);
 
+    // mPass SSO. Settings come from the process env via %env(default::…)%, resolved per request —
+    // never a Mautic config key (ConfigEnvVars maps those to MAUTIC_<KEY>) and never compiled in.
+    $services->set(Mautic\UserBundle\Security\Mpass\ProxyIdentity::class)
+        ->args([
+            '$authType'           => '%env(default::AUTH_TYPE)%',
+            '$defaultEmailDomain' => '%env(default::DEFAULT_EMAIL_DOMAIN)%',
+            '$corporateId'        => '%env(default::SMB_CORPORATE_ID)%',
+            '$edgeSecret'         => '%env(default::MPASS_EDGE_SECRET)%',
+            '$edgeSecretFile'     => '%env(default::MPASS_EDGE_SECRET_FILE)%',
+            '$allowAnyTenant'     => '%env(default::MPASS_ALLOW_ANY_TENANT)%',
+        ]);
+    $services->set(Mautic\UserBundle\Security\Mpass\MpassOutboundGuard::class);
+    $services->set(Mautic\UserBundle\Security\Authenticator\MpassProxyAuthenticator::class)
+        ->arg('$defaultRole', '%env(default::MPASS_SSO_DEFAULT_ROLE)%')
+        ->arg('$logger', service('monolog.logger.mautic'));
+    $services->set(Mautic\UserBundle\EventListener\MpassLocalAuthGuard::class)
+        ->args([
+            '$portalUrl'        => '%env(default::LOGOUT_REDIRECT_URL)%',
+            '$sessionFactory'   => service('session.factory'),
+            '$rememberMePath'   => '%mautic.rememberme_path%',
+            '$rememberMeDomain' => '%mautic.rememberme_domain%',
+            '$logger'           => service('monolog.logger.mautic'),
+        ]);
+    $services->set(Mautic\UserBundle\Twig\MpassExtension::class)
+        ->args([
+            '$portalUrl' => '%env(default::LOGOUT_REDIRECT_URL)%',
+        ]);
+
     $services->set(Mautic\UserBundle\Security\SAML\Helper::class);
     $services->set('security.token.permissions', TokenPermissions::class);
 
