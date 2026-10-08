@@ -38,9 +38,24 @@ Setup: `AUTH_TYPE=SSO`, `DEFAULT_EMAIL_DOMAIN` set, `LOGOUT_REDIRECT_URL=https:/
 | 14 | Without a cookie: `/s/login`, `/s/users`, `/index.php/s/dashboard`, `/installer`, `/elfinder` | `302` to the mPass login |
 | 15 | With the `_oauth2_proxy` cookie: `POST /passwordreset`, `GET /invite/x`, `GET /s/saml/login`, `GET /oauth/v2/authorize_login`, `POST /api/users/new`, `GET /installer` | `404` for every one |
 | 16a | Without a cookie, through the edge: `POST https://HOST/oauth/v2/token` and `GET https://HOST/api/contacts` | `302` to the mPass login for both (the API is internal-only) |
-| 16b | API enabled in Configuration, an API client with client credentials. From inside the network (`docker compose exec mautic curl …` against `http://mautic`): `POST /oauth/v2/token` (`grant_type=client_credentials`), then `GET /api/contacts` with the token | Token issued, contacts returned, no mPass session involved |
+| 16b | As an admin: enable the API in Configuration and create an OAuth 2 client in Settings > API Credentials. Then run the [16b command](#16b-internal-api-call) from inside the network | `200`, no mPass session involved |
 | 17 | With the `_oauth2_proxy` cookie: `GET /s/dashboard` with `Authorization: Bearer x` | `401` |
 | 18 | `curl -skI https://HOST/s/dashboard` with the cookie; then, without one, `curl -skI https://HOST/form/embed/<id>` and a landing page | Admin UI: `Strict-Transport-Security`, `X-Frame-Options: SAMEORIGIN`, `X-Content-Type-Options: nosniff`, `Referrer-Policy` present. Form and landing page: the same, but no `X-Frame-Options` (they are framed on customer sites) |
+
+### 16b: internal API call
+
+Run from the devkit directory, with `<site host>` the host of `MAUTIC_SITE_URL` and the client's
+public id and secret. Both headers are required: without `Host` Mautic answers `400 Untrusted Host`
+(only the site host is trusted), and without `X-Forwarded-Proto: https` the token request is `404`
+(the OAuth2 routes are https-only).
+
+```bash
+docker compose exec mautic sh -c '
+H="-H Host:<site host> -H X-Forwarded-Proto:https"
+T=$(curl -s $H -X POST http://mautic/oauth/v2/token -d grant_type=client_credentials \
+      -d client_id=<public id> -d client_secret=<secret> | sed -n "s/.*\"access_token\":\"\([^\"]*\)\".*/\1/p")
+curl -s -o /dev/null -w "%{http_code}\n" $H -H "Authorization: Bearer $T" http://mautic/api/contacts'
+```
 
 ## Configuration failures
 

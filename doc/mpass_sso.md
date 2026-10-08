@@ -139,8 +139,24 @@ internal network instead (`http://mautic` on the backend network), where Mautic'
 firewall authenticates them with no identity headers involved. Whether the API is on is the
 admin's Configuration setting (`api_enabled`, default off); the image does not override it.
 
-Only the client-credentials grant works. Mautic's OAuth clients allow the authorization-code,
-refresh-token and client-credentials grants, never a password grant, but the authorization-code
+Internal calls need two headers, as if they had come through Traefik:
+
+- `Host: <site host>` (the host of `MAUTIC_SITE_URL`). `TRUSTED_HOSTS` defaults to that host
+  only, so `Host: mautic` gets `400 Untrusted Host`.
+- `X-Forwarded-Proto: https`. The OAuth2 routes are https-only, so without it
+  `/oauth/v2/token` is a `404`. Mautic honours the header because the caller's address is in
+  `TRUSTED_PROXIES`.
+
+```bash
+curl -X POST http://mautic/oauth/v2/token -H 'Host: mautic.example.com' -H 'X-Forwarded-Proto: https' \
+  -d grant_type=client_credentials -d client_id=<public id> -d client_secret=<secret>
+curl http://mautic/api/contacts -H 'Host: mautic.example.com' -H 'X-Forwarded-Proto: https' \
+  -H 'Authorization: Bearer <access_token>'
+```
+
+Only the client-credentials grant works. An OAuth2 client an admin creates in Settings > API
+Credentials allows the authorization-code, refresh-token and client-credentials grants (Mautic adds
+client credentials only for an admin), never a password grant, but the authorization-code
 flow cannot be used under SSO: `/oauth/v2/authorize` sends the user to `authorize_login`, its
 password form, which returns `404` (`MpassLocalAuthGuard::GATED_ROUTES`). Basic auth also works
 if an admin enables it, but SSO users have no usable password.

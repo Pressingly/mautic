@@ -25,7 +25,9 @@
 #
 # Routing (doc/mpass_sso.md §"ForwardAuth bypass list"): the admin UI, the installer and
 # the API (/api, /oauth/v2) are behind mpass-auth; API clients call http://mautic on the
-# backend network instead. Everything else is Mautic's public surface (landing pages,
+# backend network instead, with `Host: mautic.${PLATFORM_DOMAIN}` (only the site host is
+# trusted, else 400) and `X-Forwarded-Proto: https` (the OAuth2 routes are https-only, else
+# 404). Everything else is Mautic's public surface (landing pages,
 # tracking, forms, email links, callbacks), framable on customer sites. Every router strips
 # client identity headers, so a public route is always anonymous.
 # =============================================================================
