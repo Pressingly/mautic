@@ -1,0 +1,42 @@
+.git
+.github
+.ddev
+node_modules
+plugins/GrapesJsBuilderBundle/node_modules
+vendor
+var/*
+!var/.gitkeep
+config/local.php
+config/parameters_local.php
+# A dotenv file would silently supply the SSO settings (AUTH_TYPE, MPASS_*); only .env ships.
+.env.local*
+.env.prod*
+.env.test
+# Keys and certificates never belong in the image, wherever they sit.
+**/*.key
+**/*.pem
+**/*.crt
+**/*.p12
+# Tests are not shipped, except the data fixtures upstream registers as services in every
+# environment (e.g. LeadBundle/Config/services.php:51-60): the installer's container compile needs
+# those classes.
+**/tests
+**/Tests
+!app/bundles/*/Tests/DataFixtures
+!plugins/*/Tests/DataFixtures
+# Local uploads; keep what upstream tracks (see .gitignore).
+media/files/*
+!media/files/.htaccess
+media/images/*
+!media/images/flags
+!media/images/mejs
+!media/images/apple-touch-icon.png
+!media/images/avatar.png
+!media/images/placeholder*
+!media/images/favicon.ico
+!media/images/mautic_logo*
+!media/images/.htaccess
+media/dashboards/*
+!media/dashboards/*.json
+# Devkit env for docker/mpass/docker-compose.devkit.yml (secrets)
+docker/mpass/.env

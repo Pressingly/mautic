@@ -12,7 +12,7 @@
 	{% if isIndex %}
 	<div id="page-list-wrapper" class="panel panel-default">
 		{%- set pageButtons = [] %}
-		{% if permissions.create %}
+		{% if permissions.create and not mpassSsoEnabled() %}
 			{% set pageButtons = pageButtons|merge([{
 				'attr': {
 					'class': 'btn btn-ghost btn--icon-only btn-nospin',
@@ -73,7 +73,7 @@
 		{{ block('listResults') }}
 	{% endif %}
 
-	{% if isIndex and permissions.create and inviteForm %}
+	{% if isIndex and permissions.create and inviteForm and not mpassSsoEnabled() %}
 		{% set modalAttributes = {} %}
 		{% if app.request.query.get('open') == 'invite' %}
 			{% set modalAttributes = modalAttributes|merge({'data-auto-open': 'true'}) %}

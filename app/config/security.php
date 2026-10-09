@@ -98,7 +98,10 @@ $firewalls = [
             'domain'   => '%mautic.rememberme_domain%',
             'samesite' => 'lax',
         ],
-        'entry_point'      => Mautic\UserBundle\Security\EntryPoint\MainEntryPoint::class,
+        // mPass SSO header authenticator. Registered unconditionally; it reads AUTH_TYPE at runtime
+        // and is inert unless AUTH_TYPE=SSO. Never read AUTH_TYPE in this file: it is compiled.
+        'custom_authenticators' => [Mautic\UserBundle\Security\Authenticator\MpassProxyAuthenticator::class],
+        'entry_point'           => Mautic\UserBundle\Security\EntryPoint\MainEntryPoint::class,
         'mautic_sso'       => [], // options are copied from `form_login` in \Mautic\UserBundle\DependencyInjection\Firewall\Factory\MauticSsoFactory
         'fos_oauth'        => true,
         'context'          => 'mautic',

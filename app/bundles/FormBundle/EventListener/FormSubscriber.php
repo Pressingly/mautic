@@ -17,6 +17,7 @@ use Mautic\FormBundle\Form\Type\SubmitActionEmailType;
 use Mautic\FormBundle\Form\Type\SubmitActionRepostType;
 use Mautic\FormBundle\FormEvents;
 use Mautic\LeadBundle\Entity\Lead;
+use Mautic\UserBundle\Security\Mpass\MpassOutboundGuard;
 use Symfony\Component\EventDispatcher\EventSubscriberInterface;
 use Symfony\Component\HttpFoundation\RedirectResponse;
 use Symfony\Component\Routing\Generator\UrlGeneratorInterface;
@@ -34,6 +35,7 @@ final readonly class FormSubscriber implements EventSubscriberInterface
         private TranslatorInterface $translator,
         private RouterInterface $router,
         private LanguageHelper $languageHelper,
+        private MpassOutboundGuard $mpassOutboundGuard, // fork: mPass SSO only
     ) {
         $this->mailer = $mailer->getMailer();
     }
@@ -243,7 +245,9 @@ final readonly class FormSubscriber implements EventSubscriberInterface
         }
 
         try {
-            $client   = new Client(['timeout' => 15]);
+            // Under mPass SSO: no private/loopback targets, no redirects (MpassOutboundGuard).
+            $guardOptions = $this->mpassOutboundGuard->check((string) $config['post_url']);
+            $client       = new Client(['timeout' => 15] + $guardOptions);
             $response = $client->post(
                 $config['post_url'],
                 [

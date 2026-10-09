@@ -1,0 +1,138 @@
+# =============================================================================
+# Mautic behind the mPass SSO devkit (local testing only)
+# =============================================================================
+# An extra compose file for github.com/Pressingly/mpass-sso-devkit, run INSIDE the
+# devkit's compose project (the devkit's Traefik only routes that project). From the
+# devkit checkout, with this fork cloned next to it as ../mautic:
+#
+#   1. Append docker/mpass/devkit.env.example to the devkit's .env and fill it in.
+#   2. docker compose -f docker-compose.yml -f ../mautic/docker/mpass/docker-compose.devkit.yml up -d --build
+#
+# Relative paths below resolve against the devkit directory (the first -f file), so
+# the build context is ../mautic. The networks are the devkit's own.
+#
+# Host: https://mautic.${PLATFORM_DOMAIN} (mautic.foss.local.dev). Add it to
+# /etc/hosts next to the devkit's own names.
+#
+# First start: Mautic installs itself (CLI, placeholder admin nobody can log in as) and
+# creates the "mPass Member" default role (regular member: marketer permissions).
+#
+# Users and roles (no one has a password under SSO), from the devkit directory:
+#   docker compose -f docker-compose.yml -f ../mautic/docker/mpass/docker-compose.devkit.yml \
+#     exec -u www-data mautic php /opt/mautic-users.php \
+#     <list | member-perms <marketer|contributor|viewer|none> | grant-admin <email>... | revoke-admin <email>...>
+# grant-admin works before the person's first login; it is the only way to get admin.
+#
+# Routing (doc/mpass_sso.md §"ForwardAuth bypass list"): the admin UI, the installer and
+# the API (/api, /oauth/v2) are behind mpass-auth; API clients call http://mautic on the
+# backend network instead, with `Host: mautic.${PLATFORM_DOMAIN}` (only the site host is
+# trusted, else 400) and `X-Forwarded-Proto: https` (the OAuth2 routes are https-only, else
+# 404). Everything else is Mautic's public surface (landing pages,
+# tracking, forms, email links, callbacks), framable on customer sites. Every router strips
+# client identity headers, so a public route is always anonymous.
+# =============================================================================
+
+services:
+
+  # Backend network only; no published port.
+  mautic-db:
+    image: mariadb:10.11
+    restart: unless-stopped
+    environment:
+      MARIADB_DATABASE: mautic
+      MARIADB_USER: mautic
+      MARIADB_PASSWORD: ${MAUTIC_DB_PASSWORD:?set MAUTIC_DB_PASSWORD in the devkit .env}
+      MARIADB_ROOT_PASSWORD: ${MAUTIC_DB_ROOT_PASSWORD:?set MAUTIC_DB_ROOT_PASSWORD in the devkit .env}
+    volumes:
+      - mautic-db-data:/var/lib/mysql
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  mautic:
+    build:
+      context: ../mautic
+    image: mautic-mpass:devkit
+    restart: unless-stopped
+    # NEVER add `ports:` (audit row 2): a published port is a way in that
+    # never passes ForwardAuth, and the identity headers would be forgeable.
+    depends_on:
+      mautic-db:
+        condition: service_healthy
+    environment:
+      # Read by the fork at runtime (never written to a Mautic config file).
+      AUTH_TYPE: SSO
+      DEFAULT_EMAIL_DOMAIN: ${DEFAULT_EMAIL_DOMAIN}
+      SMB_CORPORATE_ID: ${SMB_CORPORATE_ID:-}
+      # Dev only: this kit leaves SMB_CORPORATE_ID empty, which admits every
+      # principal in the Cognito pool. The image refuses that under SSO unless
+      # it is said out loud here. Drop this line when SMB_CORPORATE_ID is set.
+      MPASS_ALLOW_ANY_TENANT: "1"
+      LOGOUT_REDIRECT_URL: https://${PLATFORM_DOMAIN}
+      SESSION_COOKIE_MAX_AGE_SECONDS: ${SESSION_COOKIE_MAX_AGE_SECONDS:-432000}
+      # Optional. Empty: header trust is topology-based, like the other apps.
+      # Set (>= 32 chars): Mautic trusts identity headers only with it, and the
+      # protected router below injects it.
+      MPASS_EDGE_SECRET: ${MPASS_EDGE_SECRET:-}
+      # Read by docker/mpass/entrypoint.sh (install + config/parameters_local.php).
+      MAUTIC_SITE_URL: https://mautic.${PLATFORM_DOMAIN}
+      MAUTIC_DB_HOST: mautic-db
+      MAUTIC_DB_NAME: mautic
+      MAUTIC_DB_USER: mautic
+      MAUTIC_DB_PASSWORD: ${MAUTIC_DB_PASSWORD}
+      # Only Traefik can reach the container (no published port); these are the
+      # Docker bridge ranges its requests come from.
+      TRUSTED_PROXIES: 172.16.0.0/12,192.168.0.0/16,10.0.0.0/8
+    volumes:
+      - mautic-config:/var/www/html/config
+      - mautic-media-files:/var/www/html/media/files
+      - mautic-media-images:/var/www/html/media/images
+    networks:
+      - frontend
+      - backend
+    labels:
+      - traefik.enable=true
+      - traefik.http.services.mautic.loadbalancer.server.port=80
+
+      # Edge secret: set on the protected router (overwriting any client value),
+      # removed on the public one. With MPASS_EDGE_SECRET empty, both remove it.
+      - traefik.http.middlewares.mautic-edge-secret.headers.customrequestheaders.X-Mpass-Edge-Secret=${MPASS_EDGE_SECRET:-}
+      - traefik.http.middlewares.mautic-strip-edge-secret.headers.customrequestheaders.X-Mpass-Edge-Secret=
+
+      # Protected: the admin UI (the `main` firewall: /s/, elfinder, efconnect), the
+      # installer, and the API (/api, /oauth/v2: internal-only, per the platform standard),
+      # also through the /index.php/ front controller. Strip client identity headers,
+      # authenticate, then add the edge secret.
+      - traefik.http.routers.mautic-secure.rule=Host(`mautic.${PLATFORM_DOMAIN}`) && PathRegexp(`^(/index\.php)?/(s(/|$$)|elfinder|efconnect|installer|api(/|$$)|oauth(/|$$))`)
+      - traefik.http.routers.mautic-secure.entrypoints=websecure
+      - traefik.http.routers.mautic-secure.service=mautic
+      - traefik.http.routers.mautic-secure.priority=20
+      - traefik.http.routers.mautic-secure.middlewares=strip-auth-headers@docker,security-headers@docker,mpass-auth@docker,mautic-edge-secret@docker
+
+      # Public: everything else. Landing pages are a catch-all slug, so this is a
+      # catch-all rather than an allow-list. Anonymous by construction.
+      - traefik.http.routers.mautic-public.rule=Host(`mautic.${PLATFORM_DOMAIN}`)
+      - traefik.http.routers.mautic-public.entrypoints=websecure
+      - traefik.http.routers.mautic-public.service=mautic
+      - traefik.http.routers.mautic-public.priority=10
+      - traefik.http.routers.mautic-public.middlewares=strip-auth-headers@docker,mautic-strip-edge-secret@docker,mautic-public-headers@docker
+      # Not security-headers@docker: its X-Frame-Options: SAMEORIGIN breaks forms embedded
+      # "via iframe" (/form/{id}, /form/embed/{id}) and framed landing pages on customer
+      # sites, and Mautic sends no frame header of its own. The rest of the set is kept;
+      # the admin UI router above keeps SAMEORIGIN.
+      - traefik.http.middlewares.mautic-public-headers.headers.stsSeconds=31536000
+      - traefik.http.middlewares.mautic-public-headers.headers.stsIncludeSubdomains=true
+      - traefik.http.middlewares.mautic-public-headers.headers.contentTypeNosniff=true
+      - traefik.http.middlewares.mautic-public-headers.headers.referrerPolicy=strict-origin-when-cross-origin
+      - traefik.http.middlewares.mautic-public-headers.headers.permissionsPolicy=camera=(), microphone=(), geolocation=(), payment=(), usb=()
+
+volumes:
+  mautic-db-data:
+  mautic-config:
+  mautic-media-files:
+  mautic-media-images:

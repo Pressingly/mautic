@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Mautic\FormBundle\Tests\EventListener;
 
 use Mautic\CoreBundle\Entity\IpAddress;
+use Mautic\CoreBundle\Helper\CoreParametersHelper;
 use Mautic\CoreBundle\Helper\IpLookupHelper;
 use Mautic\CoreBundle\Helper\LanguageHelper;
 use Mautic\CoreBundle\Model\AuditLogModel;
@@ -16,6 +17,8 @@ use Mautic\FormBundle\Event\SubmissionEvent;
 use Mautic\FormBundle\EventListener\FormSubscriber;
 use Mautic\LeadBundle\Entity\Lead;
 use Mautic\UserBundle\Entity\User;
+use Mautic\UserBundle\Security\Mpass\MpassOutboundGuard;
+use Mautic\UserBundle\Security\Mpass\ProxyIdentity;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
@@ -46,7 +49,8 @@ final class FormSubscriberTest extends TestCase
             $this->mailer,
             $this->createStub(TranslatorInterface::class),
             $this->createStub(RouterInterface::class),
-            $this->createStub(LanguageHelper::class)
+            $this->createStub(LanguageHelper::class),
+            new MpassOutboundGuard(new ProxyIdentity(null, null, null), $this->createStub(CoreParametersHelper::class)),
         );
     }
 
