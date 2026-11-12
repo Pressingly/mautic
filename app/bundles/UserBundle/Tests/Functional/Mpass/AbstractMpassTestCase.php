@@ -108,7 +108,7 @@ abstract class AbstractMpassTestCase extends MauticMysqlTestCase
     private function serveJwks(): void
     {
         $httpClient = self::getContainer()->get(HttpClientInterface::class);
-        \assert($httpClient instanceof MockHttpClient);
+        $this->assertInstanceOf(MockHttpClient::class, $httpClient);
         $httpClient->setResponseFactory(function (string $method, string $url): MockResponse {
             if (!isset($this->jwksResponses[$url])) {
                 return new MockResponse();

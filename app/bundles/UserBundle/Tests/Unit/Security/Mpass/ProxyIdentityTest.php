@@ -36,8 +36,8 @@ final class ProxyIdentityTest extends TestCase
     #[DataProvider('edgeCases')]
     public function testFromEdgeFailsClosed(?string $configured, string $sent, bool $trusted): void
     {
-        $identity = new ProxyIdentity('SSO', null, null, self::unconfiguredVerifier(), $configured);
-        $request  = self::request(['HTTP_X_AUTH_REQUEST_EMAIL' => 'alice@example.com', 'HTTP_X_MPASS_EDGE_SECRET' => $sent]);
+        $identity = new ProxyIdentity('SSO', null, null, $this->unconfiguredVerifier(), $configured);
+        $request  = $this->request(['HTTP_X_AUTH_REQUEST_EMAIL' => 'alice@example.com', 'HTTP_X_MPASS_EDGE_SECRET' => $sent]);
 
         $this->assertSame($trusted, $identity->fromEdge($request));
         $this->assertSame($trusted ? 'alice@example.com' : '', $identity->asserted($request), 'untrusted headers are ignored');
@@ -45,15 +45,15 @@ final class ProxyIdentityTest extends TestCase
 
     public function testMpassIdForLogsNeverReturnsAnEmail(): void
     {
-        $this->assertSame('mpass-123', ProxyIdentity::mpassIdForLogs(self::request(['HTTP_X_AUTH_REQUEST_USER' => 'mpass-123', 'HTTP_X_AUTH_REQUEST_EMAIL' => 'a@example.com'])));
-        $this->assertSame('mpass-456', ProxyIdentity::mpassIdForLogs(self::request(['HTTP_X_AUTH_REQUEST_USER' => 'a@example.com', 'HTTP_X_AUTH_REQUEST_PREFERRED_USERNAME' => 'mpass-456'])));
-        $this->assertSame('-', ProxyIdentity::mpassIdForLogs(self::request(['HTTP_X_AUTH_REQUEST_EMAIL' => 'a@example.com'])));
+        $this->assertSame('mpass-123', ProxyIdentity::mpassIdForLogs($this->request(['HTTP_X_AUTH_REQUEST_USER' => 'mpass-123', 'HTTP_X_AUTH_REQUEST_EMAIL' => 'a@example.com'])));
+        $this->assertSame('mpass-456', ProxyIdentity::mpassIdForLogs($this->request(['HTTP_X_AUTH_REQUEST_USER' => 'a@example.com', 'HTTP_X_AUTH_REQUEST_PREFERRED_USERNAME' => 'mpass-456'])));
+        $this->assertSame('-', ProxyIdentity::mpassIdForLogs($this->request(['HTTP_X_AUTH_REQUEST_EMAIL' => 'a@example.com'])));
     }
 
     public function testCorporateBindingWithoutAVerifierRefuses(): void
     {
-        $identity = new ProxyIdentity('SSO', null, 'acme-42', self::unconfiguredVerifier(), self::SECRET);
-        $refusal  = $identity->corporateRefusal(self::request(['HTTP_X_MPASS_EDGE_SECRET' => self::SECRET, 'HTTP_X_AUTH_REQUEST_ACCESS_TOKEN' => 'a.b.c']));
+        $identity = new ProxyIdentity('SSO', null, 'acme-42', $this->unconfiguredVerifier(), self::SECRET);
+        $refusal  = $identity->corporateRefusal($this->request(['HTTP_X_MPASS_EDGE_SECRET' => self::SECRET, 'HTTP_X_AUTH_REQUEST_ACCESS_TOKEN' => 'a.b.c']));
 
         $this->assertInstanceOf(MpassRefusalException::class, $refusal);
         $this->assertSame(MpassRefusalException::TOKEN, $refusal->reason);
@@ -62,21 +62,21 @@ final class ProxyIdentityTest extends TestCase
 
     public function testCorporateBindingOffOnlyWithTheOptIn(): void
     {
-        $request = self::request(['HTTP_X_MPASS_EDGE_SECRET' => self::SECRET]);
+        $request = $this->request(['HTTP_X_MPASS_EDGE_SECRET' => self::SECRET]);
 
-        $this->assertNull((new ProxyIdentity('SSO', null, null, self::unconfiguredVerifier(), self::SECRET, null, '1'))->corporateRefusal($request));
-        $this->assertSame('no_tenant_binding', (new ProxyIdentity('SSO', null, null, self::unconfiguredVerifier(), self::SECRET))->corporateRefusal($request)?->detail);
+        $this->assertNotInstanceOf(MpassRefusalException::class, (new ProxyIdentity('SSO', null, null, $this->unconfiguredVerifier(), self::SECRET, null, '1'))->corporateRefusal($request));
+        $this->assertSame('no_tenant_binding', (new ProxyIdentity('SSO', null, null, $this->unconfiguredVerifier(), self::SECRET))->corporateRefusal($request)?->detail);
     }
 
     /**
      * @param array<string, string> $server
      */
-    private static function request(array $server): Request
+    private function request(array $server): Request
     {
         return Request::create('/s/account', 'GET', [], [], [], $server);
     }
 
-    private static function unconfiguredVerifier(): MpassTokenVerifier
+    private function unconfiguredVerifier(): MpassTokenVerifier
     {
         return new MpassTokenVerifier(new MpassJwks(new MockHttpClient(), new ArrayAdapter()));
     }

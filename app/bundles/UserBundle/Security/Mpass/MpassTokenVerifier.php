@@ -79,7 +79,7 @@ final readonly class MpassTokenVerifier
             throw new MpassTokenException(MpassTokenException::MISSING);
         }
 
-        [$header, $unverified] = self::unverifiedParts($token);
+        [$header, $unverified] = $this->unverifiedParts($token);
         if (self::ALGORITHM !== ($header['alg'] ?? null)) {
             throw new MpassTokenException(MpassTokenException::UNSUPPORTED_ALGORITHM);
         }
@@ -93,7 +93,7 @@ final readonly class MpassTokenVerifier
         }
 
         $claims = $this->decode($token, $this->signingKey($issuer, $kid));
-        self::assertRequiredClaims($claims, $issuer);
+        $this->assertRequiredClaims($claims, $issuer);
         if (!self::audienceMatches($claims, $this->clientId)) {
             throw new MpassTokenException(MpassTokenException::WRONG_AUDIENCE);
         }
@@ -150,7 +150,7 @@ final readonly class MpassTokenVerifier
     /**
      * @param array<string, mixed> $claims
      */
-    private static function assertRequiredClaims(array $claims, string $issuer): void
+    private function assertRequiredClaims(array $claims, string $issuer): void
     {
         foreach (self::REQUIRED_CLAIMS as $claim) {
             if (!isset($claims[$claim])) {
@@ -167,20 +167,20 @@ final readonly class MpassTokenVerifier
      *
      * @return array{array<string, mixed>, array<string, mixed>}
      */
-    private static function unverifiedParts(string $token): array
+    private function unverifiedParts(string $token): array
     {
         $segments = explode('.', $token);
         if (3 !== count($segments)) {
             throw new MpassTokenException(MpassTokenException::MALFORMED);
         }
 
-        return [self::decodeSegment($segments[0]), self::decodeSegment($segments[1])];
+        return [$this->decodeSegment($segments[0]), $this->decodeSegment($segments[1])];
     }
 
     /**
      * @return array<string, mixed>
      */
-    private static function decodeSegment(string $segment): array
+    private function decodeSegment(string $segment): array
     {
         try {
             $decoded = json_decode(JWT::urlsafeB64Decode($segment), true, 32, JSON_THROW_ON_ERROR);

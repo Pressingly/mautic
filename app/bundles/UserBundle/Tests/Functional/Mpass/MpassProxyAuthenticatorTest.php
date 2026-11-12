@@ -576,10 +576,10 @@ final class MpassProxyAuthenticatorTest extends AbstractMpassTestCase
         $this->assertSame(403, $this->get('/s/account', 'forged@example.com', $server)->getStatusCode());
         $this->assertSame($count, $this->userCount());
 
-        $records = array_values(array_filter($logs->getRecords(), static fn ($record): bool => str_starts_with($record->message, 'mPass')));
-        $this->assertSame(['mPass identity headers ignored: request lacks the edge secret', 'mPass SSO: admin-UI request without a valid edge secret refused'], array_map(static fn ($record): string => $record->message, $records));
+        $records = array_values(array_filter($logs->getRecords(), static fn (\Monolog\LogRecord $record): bool => str_starts_with($record->message, 'mPass')));
+        $this->assertSame(['mPass identity headers ignored: request lacks the edge secret', 'mPass SSO: admin-UI request without a valid edge secret refused'], array_map(static fn (\Monolog\LogRecord $record): string => $record->message, $records));
         $this->assertSame(['mpass_id' => 'mpass-7', 'path' => '/mtracking.gif', 'remote_addr' => '10.0.0.9', 'secret_header_given' => true], $records[0]->context);
-        $logged = json_encode(array_map(static fn ($record): array => $record->context, $records));
+        $logged = json_encode(array_map(static fn (\Monolog\LogRecord $record): array => $record->context, $records));
         foreach (['forged@example.com', self::EDGE_SECRET, 'secret-token'] as $neverLogged) {
             $this->assertStringNotContainsString($neverLogged, (string) $logged);
         }
@@ -681,7 +681,7 @@ final class MpassProxyAuthenticatorTest extends AbstractMpassTestCase
     private function captureMauticLog(): TestHandler
     {
         $logger = self::getContainer()->get('monolog.logger.mautic'); // @phpstan-ignore mautic.noContainerGet (the mautic log channel)
-        \assert($logger instanceof Logger);
+        $this->assertInstanceOf(Logger::class, $logger);
         $handler = new TestHandler();
         $logger->pushHandler($handler);
 

@@ -57,24 +57,24 @@ final readonly class MpassJwks
     public function signingKeys(string $issuer, string $kid): array
     {
         $cached = $this->cached($issuer);
-        if (null !== $cached && !self::needsRefresh($cached, $kid)) {
-            return self::parse($cached['jwks']);
+        if (null !== $cached && !$this->needsRefresh($cached, $kid)) {
+            return $this->parse($cached['jwks']);
         }
 
-        $lastGood = self::lastGood($cached);
+        $lastGood = $this->lastGood($cached);
         $jwks     = $this->refresh($issuer, null === $lastGood ? self::LOCK_WAIT_SECONDS : 0) ?? $lastGood;
 
-        return null === $jwks ? throw new MpassTokenException(MpassTokenException::JWKS_UNAVAILABLE) : self::parse($jwks);
+        return null === $jwks ? throw new MpassTokenException(MpassTokenException::JWKS_UNAVAILABLE) : $this->parse($jwks);
     }
 
     /**
      * @param array{fetched_at: int, jwks: array<string, mixed>} $cached
      */
-    private static function needsRefresh(array $cached, string $kid): bool
+    private function needsRefresh(array $cached, string $kid): bool
     {
         $age = time() - $cached['fetched_at'];
 
-        return $age >= self::LIFESPAN_SECONDS || ($age >= self::REFRESH_INTERVAL_SECONDS && !self::containsKid($cached['jwks'], $kid));
+        return $age >= self::LIFESPAN_SECONDS || ($age >= self::REFRESH_INTERVAL_SECONDS && !$this->containsKid($cached['jwks'], $kid));
     }
 
     /**
@@ -82,7 +82,7 @@ final readonly class MpassJwks
      *
      * @return array<string, mixed>|null
      */
-    private static function lastGood(?array $cached): ?array
+    private function lastGood(?array $cached): ?array
     {
         $withinGrace = null !== $cached && time() - $cached['fetched_at'] < self::LIFESPAN_SECONDS + self::STALE_GRACE_SECONDS;
 
@@ -144,14 +144,14 @@ final readonly class MpassJwks
                 'max_redirects' => 0,
                 'headers'       => ['Accept' => 'application/json'],
             ])->toArray();
-            self::parse($jwks);
+            $this->parse($jwks);
         } catch (HttpClientException|MpassTokenException) {
             $this->recordFailure($issuer);
 
             return null;
         }
 
-        $item = $this->cache->getItem(self::cacheKey('jwks', $issuer));
+        $item = $this->cache->getItem($this->cacheKey('jwks', $issuer));
         $this->cache->save($item->set(['fetched_at' => time(), 'jwks' => $jwks])->expiresAfter(self::LIFESPAN_SECONDS + self::STALE_GRACE_SECONDS));
 
         return $jwks;
@@ -162,7 +162,7 @@ final readonly class MpassJwks
      */
     private function cached(string $issuer): ?array
     {
-        $item  = $this->cache->getItem(self::cacheKey('jwks', $issuer));
+        $item  = $this->cache->getItem($this->cacheKey('jwks', $issuer));
         $value = $item->isHit() ? $item->get() : null;
 
         return is_array($value) && is_int($value['fetched_at'] ?? null) && is_array($value['jwks'] ?? null) ? $value : null;
@@ -170,12 +170,12 @@ final readonly class MpassJwks
 
     private function recentlyFailed(string $issuer): bool
     {
-        return $this->cache->getItem(self::cacheKey('failed', $issuer))->isHit();
+        return $this->cache->getItem($this->cacheKey('failed', $issuer))->isHit();
     }
 
     private function recordFailure(string $issuer): void
     {
-        $item = $this->cache->getItem(self::cacheKey('failed', $issuer));
+        $item = $this->cache->getItem($this->cacheKey('failed', $issuer));
         $this->cache->save($item->set(true)->expiresAfter(self::FAILURE_BACKOFF_SECONDS));
     }
 
@@ -187,12 +187,12 @@ final readonly class MpassJwks
      *
      * @return array<string, Key>
      */
-    private static function parse(array $jwks): array
+    private function parse(array $jwks): array
     {
         $keys = [];
         foreach (is_array($jwks['keys'] ?? null) ? $jwks['keys'] : [] as $jwk) {
             $kid = is_array($jwk) && is_string($jwk['kid'] ?? null) ? $jwk['kid'] : '';
-            $key = '' === $kid ? null : self::importKey($jwk);
+            $key = '' === $kid ? null : $this->importKey($jwk);
             if (null !== $key) {
                 $keys[$kid] = $key;
             }
@@ -207,7 +207,7 @@ final readonly class MpassJwks
      *
      * @param array<string, mixed> $jwk
      */
-    private static function importKey(array $jwk): ?Key
+    private function importKey(array $jwk): ?Key
     {
         if ('RSA' !== ($jwk['kty'] ?? null)) {
             return null;
@@ -224,14 +224,14 @@ final readonly class MpassJwks
     /**
      * @param array<string, mixed> $jwks
      */
-    private static function containsKid(array $jwks, string $kid): bool
+    private function containsKid(array $jwks, string $kid): bool
     {
         $keys = is_array($jwks['keys'] ?? null) ? $jwks['keys'] : [];
 
         return in_array($kid, array_column($keys, 'kid'), true);
     }
 
-    private static function cacheKey(string $kind, string $issuer): string
+    private function cacheKey(string $kind, string $issuer): string
     {
         return 'mpass_'.$kind.'.'.hash('sha256', $issuer);
     }

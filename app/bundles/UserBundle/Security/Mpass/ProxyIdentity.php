@@ -212,26 +212,26 @@ final readonly class ProxyIdentity
     {
         $required = self::configured($this->corporateId);
         if ('' === $required) {
-            return '1' === trim((string) $this->allowAnyTenant) ? null : self::refusal(MpassRefusalException::CORPORATE, 'no_tenant_binding');
+            return '1' === trim((string) $this->allowAnyTenant) ? null : $this->refusal(MpassRefusalException::CORPORATE, 'no_tenant_binding');
         }
         if (!$this->fromEdge($request)) {
-            return self::refusal(MpassRefusalException::CORPORATE, 'not_from_edge');
+            return $this->refusal(MpassRefusalException::CORPORATE, 'not_from_edge');
         }
 
         $token = trim((string) $request->headers->get(self::ACCESS_TOKEN_HEADER, ''));
         if ('' === $token) {
-            return self::refusal(MpassRefusalException::CORPORATE, MpassTokenException::MISSING);
+            return $this->refusal(MpassRefusalException::CORPORATE, MpassTokenException::MISSING);
         }
 
         try {
             $claims = $this->verifiedClaims($token);
         } catch (MpassTokenException $e) {
-            return self::refusal(MpassRefusalException::TOKEN, $e->reason);
+            return $this->refusal(MpassRefusalException::TOKEN, $e->reason);
         }
 
         return match (true) {
-            'true' !== ($claims['custom:is_corporate'] ?? null)    => self::refusal(MpassRefusalException::CORPORATE, MpassRefusalException::NOT_CORPORATE),
-            $required !== ($claims['custom:corporate_id'] ?? null) => self::refusal(MpassRefusalException::CORPORATE, MpassRefusalException::WRONG_ORGANIZATION),
+            'true' !== ($claims['custom:is_corporate'] ?? null)    => $this->refusal(MpassRefusalException::CORPORATE, MpassRefusalException::NOT_CORPORATE),
+            $required !== ($claims['custom:corporate_id'] ?? null) => $this->refusal(MpassRefusalException::CORPORATE, MpassRefusalException::WRONG_ORGANIZATION),
             default                                                => null,
         };
     }
@@ -244,7 +244,7 @@ final readonly class ProxyIdentity
         return $this->tokenVerifier->verify($token);
     }
 
-    private static function refusal(string $reason, string $detail): MpassRefusalException
+    private function refusal(string $reason, string $detail): MpassRefusalException
     {
         return new MpassRefusalException($reason, null, $detail);
     }

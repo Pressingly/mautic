@@ -14,7 +14,7 @@ final class MpassLogThrottleTest extends TestCase
 {
     public function testTheSameEventIsLoggedOncePerWindowPerThrottleKey(): void
     {
-        $logger   = self::recordingLogger();
+        $logger   = $this->recordingLogger();
         $throttle = new MpassLogThrottle($logger, new ArrayAdapter(), static fn (string $line): null => null);
 
         foreach (['mpass-1', 'mpass-2', 'mpass-3'] as $spoofedId) {
@@ -32,7 +32,7 @@ final class MpassLogThrottleTest extends TestCase
     public function testErrorsAlsoReachStderrThrottledAndWarningsDoNot(): void
     {
         $lines    = [];
-        $throttle = new MpassLogThrottle(self::recordingLogger(), new ArrayAdapter(), static function (string $line) use (&$lines): void {
+        $throttle = new MpassLogThrottle($this->recordingLogger(), new ArrayAdapter(), static function (string $line) use (&$lines): void {
             $lines[] = $line;
         });
 
@@ -45,7 +45,7 @@ final class MpassLogThrottleTest extends TestCase
 
     public function testTheWindowExpires(): void
     {
-        $logger   = self::recordingLogger();
+        $logger   = $this->recordingLogger();
         $cache    = new ArrayAdapter();
         $throttle = new MpassLogThrottle($logger, $cache, static fn (string $line): null => null);
 
@@ -59,7 +59,7 @@ final class MpassLogThrottleTest extends TestCase
     /**
      * @return AbstractLogger&object{records: list<array{string, string, array<string, mixed>}>}
      */
-    private static function recordingLogger(): AbstractLogger
+    private function recordingLogger(): AbstractLogger
     {
         return new class() extends AbstractLogger {
             /** @var list<array{string, string, array<string, mixed>}> */
