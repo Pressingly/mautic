@@ -14,12 +14,14 @@ use Symfony\Component\HttpFoundation\Request;
  *  2. every Mautic router runs strip-auth-headers before mpass-auth, so a client cannot inject
  *     X-Auth-Request-*;
  *  3. oauth2-proxy validates the upstream session and injects the headers on every request;
- *  4. OPTIONAL, when MPASS_EDGE_SECRET (or _FILE) is set: the protected router adds
- *     X-Mpass-Edge-Secret, and every Mautic router strips a client-sent copy. Link 1 only holds for
- *     the outside world: other containers on the same networks can reach Apache directly with any
- *     headers. With the secret set, identity headers are trusted only on a request that carries it.
- *     Unset, trust is topology-based like every other bundle app (the platform contract); Mautic's
- *     own outbound HTTP is still kept off internal addresses by MpassOutboundGuard.
+ *  4. REQUIRED: the protected router adds X-Mpass-Edge-Secret (MPASS_EDGE_SECRET), and every
+ *     Mautic router strips a client-sent copy. Link 1 only holds for the outside world: other
+ *     containers on the same networks can reach Apache directly with any headers. Identity headers
+ *     are trusted only on a request that carries the secret; with no usable secret (unset, a
+ *     CHANGE_ME_ placeholder, or shorter than 32 characters) nothing is trusted, so nobody can sign
+ *     in through mPass (fail closed);
+ *  5. with SMB_CORPORATE_ID set, the forwarded token's signature, issuer, expiry and audience are
+ *     verified (MpassTokenVerifier) before its corporate claims are believed.
  *
  * All settings come from the process env (or a dotenv file) via %env(default::…)%, resolved when
  * the service is built for a request, never from a Mautic config key and never at container compile
@@ -39,6 +41,13 @@ final readonly class ProxyIdentity
 
     public const EDGE_SECRET_HEADER = 'X-Mpass-Edge-Secret';
 
+    public const MIN_EDGE_SECRET_LENGTH = 32;
+
+    /** Read only to name the caller in logs; never an identity source. */
+    private const MPASS_ID_HEADERS = ['X-Auth-Request-User', 'X-Auth-Request-Preferred-Username'];
+
+    private const PLACEHOLDER_PREFIX = 'CHANGE_ME_';
+
     /** users.email / users.username are varchar(191). */
     private const MAX_EMAIL_LENGTH = 191;
 
@@ -46,10 +55,19 @@ final readonly class ProxyIdentity
         private ?string $authType,
         private ?string $defaultEmailDomain,
         private ?string $corporateId,
+        private MpassTokenVerifier $tokenVerifier,
         private ?string $edgeSecret = null,
         private ?string $edgeSecretFile = null,
         private ?string $allowAnyTenant = null,
     ) {
+    }
+
+    /** A setting's value, or '' when it is unset or still an .env.example placeholder. */
+    public static function configured(?string $value): string
+    {
+        $value = trim((string) $value);
+
+        return str_starts_with($value, self::PLACEHOLDER_PREFIX) ? '' : $value;
     }
 
     public function isSso(): bool
@@ -72,10 +90,9 @@ final readonly class ProxyIdentity
     }
 
     /**
-     * Whether the request came through the protected Traefik router. With no edge secret configured
-     * that is assumed (topology trust). With one configured, the request must carry it, compared in
-     * constant time; a configured secret shorter than 32 characters trusts nothing (the image
-     * refuses to start with one).
+     * Whether the request came through the protected Traefik router: it carries the configured edge
+     * secret, compared in constant time. Without a usable secret nothing is trusted (fail closed);
+     * the image logs that at startup.
      *
      * The image passes the secret as a FILE (MPASS_EDGE_SECRET_FILE) and removes MPASS_EDGE_SECRET
      * from Apache's environment, so phpinfo()/environment dumps cannot show it. MPASS_EDGE_SECRET
@@ -84,12 +101,44 @@ final readonly class ProxyIdentity
     public function fromEdge(Request $request): bool
     {
         $secret = $this->edgeSecret();
-        if ('' === $secret) {
-            return true;
+
+        return self::isUsableEdgeSecret($secret)
+            && hash_equals($secret, (string) $request->headers->get(self::EDGE_SECRET_HEADER, ''));
+    }
+
+    /**
+     * Whether the request asserts an mPass identity at all, trusted or not: for the warning when
+     * one arrives without the edge secret.
+     */
+    public static function carriesIdentity(Request $request): bool
+    {
+        return '' !== trim((string) $request->headers->get(self::EMAIL_HEADER, ''));
+    }
+
+    public function hasUsableEdgeSecret(): bool
+    {
+        return self::isUsableEdgeSecret($this->edgeSecret());
+    }
+
+    public static function isUsableEdgeSecret(string $secret): bool
+    {
+        return strlen($secret) >= self::MIN_EDGE_SECRET_LENGTH;
+    }
+
+    /**
+     * The caller's mPass id for log lines: the first X-Auth-Request-User or -Preferred-Username value
+     * that is not an email, else '-'. Never the email header.
+     */
+    public static function mpassIdForLogs(Request $request): string
+    {
+        foreach (self::MPASS_ID_HEADERS as $header) {
+            $value = trim((string) $request->headers->get($header, ''));
+            if ('' !== $value && !str_contains($value, '@')) {
+                return $value;
+            }
         }
 
-        return strlen($secret) >= 32
-            && hash_equals($secret, (string) $request->headers->get(self::EDGE_SECRET_HEADER, ''));
+        return '-';
     }
 
     /**
@@ -106,9 +155,9 @@ final readonly class ProxyIdentity
 
     private function edgeSecret(): string
     {
-        $secret = trim((string) $this->edgeSecret);
+        $secret = self::configured($this->edgeSecret);
         if ('' === $secret && null !== $this->edgeSecretFile && '' !== $this->edgeSecretFile && is_readable($this->edgeSecretFile)) {
-            $secret = trim((string) file_get_contents($this->edgeSecretFile));
+            $secret = self::configured((string) file_get_contents($this->edgeSecretFile));
         }
 
         return $secret;
@@ -149,53 +198,54 @@ final readonly class ProxyIdentity
     }
 
     /**
-     * Corporate-tenant binding (audit row 22). The access token is decoded WITHOUT verification
-     * (oauth2-proxy already validated it) and BOTH claims must match strictly. Absent or undecodable
-     * token → false; never throws.
+     * Corporate-tenant binding (audit row 22): null when the request may proceed, else the refusal.
+     * The forwarded token is verified first (signature, issuer, expiry, audience), then BOTH claims
+     * must match strictly. Never throws.
      *
      * Fails closed: with SMB_CORPORATE_ID unset, every principal in the Cognito pool would be
      * admitted, so that is allowed only when the deployment says so with MPASS_ALLOW_ANY_TENANT=1
-     * (the same opt-in the image's entrypoint requires). Stricter than the contract, which skips the
-     * check when SMB_CORPORATE_ID is unset; recorded as a trade-off in doc/mpass_sso.md.
+     * (the same opt-in the image's entrypoint requires), and then no token is read or fetched.
+     * Stricter than the contract, which skips the check when SMB_CORPORATE_ID is unset; recorded as
+     * a trade-off in doc/mpass_sso.md.
      */
-    public function corporateOk(Request $request): bool
+    public function corporateRefusal(Request $request): ?MpassRefusalException
     {
-        $required = trim((string) $this->corporateId);
+        $required = self::configured($this->corporateId);
         if ('' === $required) {
-            return '1' === trim((string) $this->allowAnyTenant);
+            return '1' === trim((string) $this->allowAnyTenant) ? null : self::refusal(MpassRefusalException::CORPORATE, 'no_tenant_binding');
         }
-
         if (!$this->fromEdge($request)) {
-            return false;
-        }
-        $claims = $this->decodeJwtPayload((string) $request->headers->get(self::ACCESS_TOKEN_HEADER, ''));
-
-        return null !== $claims
-            && 'true' === ($claims['custom:is_corporate'] ?? null)
-            && $required === ($claims['custom:corporate_id'] ?? null);
-    }
-
-    /**
-     * @return array<string, mixed>|null
-     */
-    private function decodeJwtPayload(string $token): ?array
-    {
-        $parts = explode('.', trim($token));
-        if (3 !== count($parts) || '' === $parts[1]) {
-            return null;
+            return self::refusal(MpassRefusalException::CORPORATE, 'not_from_edge');
         }
 
-        $json = base64_decode(strtr($parts[1], '-_', '+/'), true);
-        if (false === $json) {
-            return null;
+        $token = trim((string) $request->headers->get(self::ACCESS_TOKEN_HEADER, ''));
+        if ('' === $token) {
+            return self::refusal(MpassRefusalException::CORPORATE, MpassTokenException::MISSING);
         }
 
         try {
-            $claims = json_decode($json, true, 32, JSON_THROW_ON_ERROR);
-        } catch (\JsonException) {
-            return null;
+            $claims = $this->verifiedClaims($token);
+        } catch (MpassTokenException $e) {
+            return self::refusal(MpassRefusalException::TOKEN, $e->reason);
         }
 
-        return is_array($claims) ? $claims : null;
+        return match (true) {
+            'true' !== ($claims['custom:is_corporate'] ?? null)    => self::refusal(MpassRefusalException::CORPORATE, MpassRefusalException::NOT_CORPORATE),
+            $required !== ($claims['custom:corporate_id'] ?? null) => self::refusal(MpassRefusalException::CORPORATE, MpassRefusalException::WRONG_ORGANIZATION),
+            default                                                => null,
+        };
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function verifiedClaims(string $token): array
+    {
+        return $this->tokenVerifier->verify($token);
+    }
+
+    private static function refusal(string $reason, string $detail): MpassRefusalException
+    {
+        return new MpassRefusalException($reason, null, $detail);
     }
 }

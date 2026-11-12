@@ -7,6 +7,10 @@ namespace Mautic\UserBundle\Tests\Functional\Mpass;
 use Mautic\UserBundle\Entity\Role;
 use Mautic\UserBundle\Model\RoleModel;
 use Mautic\UserBundle\Security\Authenticator\MpassProxyAuthenticator;
+use Monolog\Handler\TestHandler;
+use Monolog\Logger;
+use Symfony\Component\HttpClient\Exception\TransportException;
+use Symfony\Component\HttpClient\Response\MockResponse;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
@@ -319,9 +323,67 @@ final class MpassProxyAuthenticatorTest extends AbstractMpassTestCase
     public function testCorporateMissingOrUndecodableTokenIsRefused(): void
     {
         $this->assertCorporateRefusal([]);
-        $this->assertCorporateRefusal(['HTTP_X_AUTH_REQUEST_ACCESS_TOKEN' => 'not-a-jwt']);
-        $this->assertCorporateRefusal(['HTTP_X_AUTH_REQUEST_ACCESS_TOKEN' => 'a.!!!.c']);
-        $this->assertCorporateRefusal(['HTTP_X_AUTH_REQUEST_ACCESS_TOKEN' => 'a.'.$this->b64('"a string"').'.c']);
+        $this->assertCorporateRefusal(['HTTP_X_AUTH_REQUEST_ACCESS_TOKEN' => 'not-a-jwt'], reason: 'token');
+        $this->assertCorporateRefusal(['HTTP_X_AUTH_REQUEST_ACCESS_TOKEN' => 'a.!!!.c'], reason: 'token');
+        $this->assertCorporateRefusal(['HTTP_X_AUTH_REQUEST_ACCESS_TOKEN' => 'a.'.$this->b64('"a string"').'.c'], reason: 'token');
+    }
+
+    // --- token verification (FOSS-782) ---------------------------------------------------------
+
+    public function testUnverifiableTokenIsRefusedBeforeItsClaimsCount(): void
+    {
+        $claims = ['custom:is_corporate' => 'true', 'custom:corporate_id' => 'acme-42'];
+        foreach ([
+            'bad signature'  => MpassTestTokens::accessToken($claims, 'attacker'),
+            'expired'        => MpassTestTokens::accessToken($claims + ['exp' => time() - 120]),
+            'wrong issuer'   => MpassTestTokens::accessToken($claims + ['iss' => 'https://cognito-idp.test-region-1.amazonaws.com/other_pool']),
+            'wrong audience' => MpassTestTokens::accessToken($claims + ['client_id' => 'another-client']),
+            'alg none'       => MpassTestTokens::unsigned(['alg' => 'none', 'kid' => MpassTestTokens::KID], $claims),
+            'HS256'          => MpassTestTokens::hs256WithPublicKey($claims),
+        ] as $label => $token) {
+            $this->assertCorporateRefusal(['HTTP_X_AUTH_REQUEST_ACCESS_TOKEN' => $token], 'newcomer@example.com', 'token', $label);
+        }
+        $this->assertNotInstanceOf(\Mautic\UserBundle\Entity\User::class, $this->findUser('newcomer@example.com'));
+    }
+
+    public function testReSignedIdTokenIsAdmitted(): void
+    {
+        $this->restartWithEnv('SMB_CORPORATE_ID', 'acme-42');
+        $this->createUser('alice@example.com');
+        $token = MpassTestTokens::idToken(['custom:is_corporate' => 'true', 'custom:corporate_id' => 'acme-42'], 'proxy', 'proxy-kid');
+
+        $this->assertServedAs('alice@example.com', $this->get('/s/account', 'alice@example.com', ['HTTP_X_AUTH_REQUEST_ACCESS_TOKEN' => $token]));
+    }
+
+    public function testJwksOutageRefusesWithoutAServerErrorAndBacksOff(): void
+    {
+        foreach ([
+            'HTTP 500' => static fn (): MockResponse => self::jsonResponse(['error' => 'down'], 500),
+            'timeout'  => static fn (): MockResponse => throw new TransportException('Idle timeout reached'),
+        ] as $label => $failure) {
+            $this->jwksResponses[MpassTestTokens::jwksUrl()] = $failure;
+            self::getContainer()->get('cache.app')->clear(); // @phpstan-ignore mautic.noContainerGet (the JWKS cache pool)
+            $this->jwksRequests = [];
+
+            $this->assertCorporateRefusal($this->token(['custom:is_corporate' => 'true', 'custom:corporate_id' => 'acme-42']), reason: 'token', message: $label);
+            $this->assertRefused('token', $this->get('/s/account', 'alice@example.com', $this->token(['custom:is_corporate' => 'true', 'custom:corporate_id' => 'acme-42'])), $label);
+            $this->assertCount(1, $this->jwksRequests, "{$label}: the second request is inside the backoff window");
+        }
+    }
+
+    public function testCorporateUnsetReadsNoTokenAndFetchesNoJwks(): void
+    {
+        $this->createUser('alice@example.com');
+
+        $this->assertServedAs('alice@example.com', $this->get('/s/account', 'alice@example.com', ['HTTP_X_AUTH_REQUEST_ACCESS_TOKEN' => 'not-a-jwt']));
+        $this->assertSame([], $this->jwksRequests);
+    }
+
+    public function testCorporateBindingWithoutVerifierSettingsRefusesEveryone(): void
+    {
+        self::setEnv('MPASS_OIDC_CLIENT_ID', 'CHANGE_ME_OIDC_CLIENT_ID');
+        $this->assertCorporateRefusal($this->token(['custom:is_corporate' => 'true', 'custom:corporate_id' => 'acme-42']), reason: 'token');
+        $this->assertSame([], $this->jwksRequests);
     }
 
     public function testCorporateRefusalLeavesNoOrphanUserRow(): void
@@ -354,6 +416,38 @@ final class MpassProxyAuthenticatorTest extends AbstractMpassTestCase
         $this->assertSame($session, $this->sessionId(), 'matching session short-circuits');
 
         $this->assertRefused('corporate', $this->get('/s/keep-alive', 'alice@example.com', $this->token(['custom:is_corporate' => 'false'])));
+    }
+
+    /**
+     * The re-check on an established session ends it only for a verified token naming another
+     * tenant. A token that cannot be verified right now (expired between refreshes, missing, JWKS
+     * down) keeps the session; a new session from the same token is still refused.
+     */
+    public function testEstablishedSessionSurvivesAnUnverifiableTokenButNotAVerifiedMismatch(): void
+    {
+        $this->restartWithEnv('SMB_CORPORATE_ID', 'acme-42');
+        $this->createUser('alice@example.com');
+        $claims = ['custom:is_corporate' => 'true', 'custom:corporate_id' => 'acme-42'];
+
+        $this->assertServedAs('alice@example.com', $this->get('/s/account', 'alice@example.com', $this->token($claims)));
+        $session = $this->sessionId();
+
+        $this->assertServedAs('alice@example.com', $this->get('/s/account', 'alice@example.com', $this->token($claims + ['exp' => time() - 120])));
+        $this->assertServedAs('alice@example.com', $this->get('/s/account', 'alice@example.com'));
+        $this->assertServedAs('alice@example.com', $this->get('/s/account', 'alice@example.com', ['HTTP_X_AUTH_REQUEST_ACCESS_TOKEN' => MpassTestTokens::accessToken($claims, 'attacker')]));
+
+        $this->jwksResponses[MpassTestTokens::jwksUrl()] = static fn (): MockResponse => self::jsonResponse(['error' => 'down'], 500);
+        self::getContainer()->get('cache.app')->clear(); // @phpstan-ignore mautic.noContainerGet (the JWKS cache pool)
+        $this->assertServedAs('alice@example.com', $this->get('/s/account', 'alice@example.com', $this->token($claims)));
+        $this->assertSame($session, $this->sessionId(), 'the session was kept throughout');
+
+        $this->client->getCookieJar()->clear();
+        $this->assertRefused('token', $this->get('/s/account', 'alice@example.com', $this->token($claims)), 'a new session stays strict');
+
+        $this->jwksResponses[MpassTestTokens::jwksUrl()] = static fn (): MockResponse => self::jsonResponse(MpassTestTokens::jwks());
+        self::getContainer()->get('cache.app')->clear(); // @phpstan-ignore mautic.noContainerGet (the JWKS cache pool)
+        $this->assertServedAs('alice@example.com', $this->get('/s/account', 'alice@example.com', $this->token($claims)));
+        $this->assertRefused('corporate', $this->get('/s/keep-alive', 'alice@example.com', $this->token(['custom:is_corporate' => 'true', 'custom:corporate_id' => 'globex-7'])));
     }
 
     // --- runtime flag (G9) and session TTL (G13c) ---------------------------------------------
@@ -445,15 +539,78 @@ final class MpassProxyAuthenticatorTest extends AbstractMpassTestCase
     }
 
     /**
-     * Bundle-contract review: the edge secret is opt-in. Unset, header trust is topology-based like
-     * every other bundle app: the identity is honoured without any X-Mpass-Edge-Secret.
+     * FOSS-782: the edge secret is required. Unset (or a placeholder), no identity header is trusted,
+     * whatever X-Mpass-Edge-Secret says: a direct call on the backend network asserts nobody.
      */
-    public function testUnsetEdgeSecretMeansTopologyTrust(): void
+    public function testUnsetOrPlaceholderEdgeSecretTrustsNoIdentity(): void
+    {
+        $alice = $this->createUser('alice@example.com');
+        $count = $this->userCount();
+        $placeholder = 'CHANGE_ME_MAUTIC_EDGE_SECRET_0123456789abcdef';
+
+        foreach ([[null, ['', 'anything', self::EDGE_SECRET]], [$placeholder, ['', $placeholder]]] as [$configured, $sent]) {
+            $this->restartWithEnv('MPASS_EDGE_SECRET', $configured);
+            foreach ($sent as $secret) {
+                foreach (['alice@example.com', 'forged@example.com'] as $email) {
+                    $this->client->getCookieJar()->clear();
+                    $this->assertSame(403, $this->get('/s/account', $email, ['HTTP_X_MPASS_EDGE_SECRET' => $secret])->getStatusCode(), "{$email} with '{$secret}'");
+                }
+            }
+        }
+        $this->assertSame($count, $this->userCount(), 'nobody provisioned');
+        $this->assertNotInstanceOf(\DateTimeInterface::class, $this->reload($alice)->getLastLogin(), 'nobody signed in');
+    }
+
+    /**
+     * Identity headers without the edge secret are ignored and logged with the mPass id, the path
+     * and the socket address, never the email or a secret value, at most once a minute per caller.
+     */
+    public function testUntrustedIdentityHeadersAreLoggedThrottledAndWithoutTheEmail(): void
+    {
+        $logs = $this->captureMauticLog();
+        $count = $this->userCount();
+        $server = ['HTTP_X_MPASS_EDGE_SECRET' => 'wrong-'.self::EDGE_SECRET, 'HTTP_X_AUTH_REQUEST_USER' => 'mpass-7', 'HTTP_X_AUTH_REQUEST_ACCESS_TOKEN' => 'secret-token', 'REMOTE_ADDR' => '10.0.0.9'];
+
+        $this->assertSame(200, $this->get('/mtracking.gif', 'forged@example.com', $server)->getStatusCode());
+        $this->assertSame(200, $this->get('/mtracking.gif', 'forged@example.com', $server)->getStatusCode());
+        $this->assertSame(403, $this->get('/s/account', 'forged@example.com', $server)->getStatusCode());
+        $this->assertSame($count, $this->userCount());
+
+        $records = array_values(array_filter($logs->getRecords(), static fn ($record): bool => str_starts_with($record->message, 'mPass')));
+        $this->assertSame(['mPass identity headers ignored: request lacks the edge secret', 'mPass SSO: admin-UI request without a valid edge secret refused'], array_map(static fn ($record): string => $record->message, $records));
+        $this->assertSame(['mpass_id' => 'mpass-7', 'path' => '/mtracking.gif', 'remote_addr' => '10.0.0.9', 'secret_header_given' => true], $records[0]->context);
+        $logged = json_encode(array_map(static fn ($record): array => $record->context, $records));
+        foreach (['forged@example.com', self::EDGE_SECRET, 'secret-token'] as $neverLogged) {
+            $this->assertStringNotContainsString($neverLogged, (string) $logged);
+        }
+    }
+
+    public function testTheMauticLogRedactsTheEdgeSecretAndTheToken(): void
+    {
+        $logs = $this->captureMauticLog();
+
+        self::getContainer()->get('monolog.logger.mautic')->warning('headers', ['headers' => ['x-mpass-edge-secret' => [self::EDGE_SECRET], 'x-auth-request-access-token' => ['secret-token']]]); // @phpstan-ignore mautic.noContainerGet (the mautic log channel)
+
+        $this->assertSame(['x-mpass-edge-secret' => '[redacted]', 'x-auth-request-access-token' => '[redacted]'], $logs->getRecords()[0]->context['headers']);
+    }
+
+    public function testUnusableEdgeSecretIsLoggedAsAnError(): void
+    {
+        $this->restartWithEnv('MPASS_EDGE_SECRET', 'CHANGE_ME_MAUTIC_EDGE_SECRET_0123456789abcdef');
+        $logs = $this->captureMauticLog();
+
+        $this->assertSame(403, $this->get('/s/account', 'alice@example.com')->getStatusCode());
+        $this->assertTrue($logs->hasErrorThatContains('mPass SSO is off: MPASS_EDGE_SECRET is unset'));
+    }
+
+    public function testUnsetEdgeSecretLeavesPublicRoutesServed(): void
     {
         $this->restartWithEnv('MPASS_EDGE_SECRET', null);
-        $this->createUser('alice@example.com');
+        $count = $this->userCount();
 
-        $this->assertServedAs('alice@example.com', $this->get('/s/account', 'alice@example.com', ['HTTP_X_MPASS_EDGE_SECRET' => '']));
+        $this->assertSame(200, $this->get('/mtracking.gif', 'forged@example.com', ['HTTP_X_MPASS_EDGE_SECRET' => ''])->getStatusCode());
+        $this->assertSame(200, $this->get('/mtc.js', null, ['HTTP_X_MPASS_EDGE_SECRET' => ''])->getStatusCode());
+        $this->assertSame($count, $this->userCount());
     }
 
     public function testShortEdgeSecretTrustsNothing(): void
@@ -512,25 +669,35 @@ final class MpassProxyAuthenticatorTest extends AbstractMpassTestCase
     }
 
     /**
-     * @param array<string, string> $claims
+     * @param array<string, mixed> $claims
      *
      * @return array<string, string>
      */
     private function token(array $claims): array
     {
-        return ['HTTP_X_AUTH_REQUEST_ACCESS_TOKEN' => $this->b64('{"alg":"none"}').'.'.$this->b64((string) json_encode($claims)).'.sig'];
+        return ['HTTP_X_AUTH_REQUEST_ACCESS_TOKEN' => MpassTestTokens::accessToken($claims)];
+    }
+
+    private function captureMauticLog(): TestHandler
+    {
+        $logger = self::getContainer()->get('monolog.logger.mautic'); // @phpstan-ignore mautic.noContainerGet (the mautic log channel)
+        \assert($logger instanceof Logger);
+        $handler = new TestHandler();
+        $logger->pushHandler($handler);
+
+        return $handler;
     }
 
     /**
      * @param array<string, string> $server
      */
-    private function assertCorporateRefusal(array $server, string $email = 'alice@example.com'): void
+    private function assertCorporateRefusal(array $server, string $email = 'alice@example.com', string $reason = 'corporate', string $message = ''): void
     {
         $this->restartWithEnv('SMB_CORPORATE_ID', 'acme-42');
         $count = $this->userCount();
 
-        $this->assertRefused('corporate', $this->get('/s/account', $email, $server));
-        $this->assertSame($count, $this->userCount(), 'refused before find-or-create');
+        $this->assertRefused($reason, $this->get('/s/account', $email, $server), $message);
+        $this->assertSame($count, $this->userCount(), 'refused before find-or-create '.$message);
     }
 
     /** Rewrites the stored MetadataBag "last used" timestamp of a mock-file session. */

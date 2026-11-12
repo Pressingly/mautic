@@ -75,10 +75,14 @@ services:
       MPASS_ALLOW_ANY_TENANT: "1"
       LOGOUT_REDIRECT_URL: https://${PLATFORM_DOMAIN}
       SESSION_COOKIE_MAX_AGE_SECONDS: ${SESSION_COOKIE_MAX_AGE_SECONDS:-432000}
-      # Optional. Empty: header trust is topology-based, like the other apps.
-      # Set (>= 32 chars): Mautic trusts identity headers only with it, and the
-      # protected router below injects it.
+      # Required (>= 32 chars, e.g. `openssl rand -hex 32`): Mautic trusts identity
+      # headers only with it, and the protected router below injects it. Empty, nobody
+      # can sign in.
       MPASS_EDGE_SECRET: ${MPASS_EDGE_SECRET:-}
+      # Verify the forwarded token when SMB_CORPORATE_ID is set.
+      MPASS_COGNITO_ISSUER_URL: ${MPASS_COGNITO_ISSUER_URL:-}
+      MPASS_TOKEN_ISSUER_URL: ${MPASS_TOKEN_ISSUER_URL:-}
+      MPASS_OIDC_CLIENT_ID: ${MPASS_OIDC_CLIENT_ID:-}
       # Read by docker/mpass/entrypoint.sh (install + config/parameters_local.php).
       MAUTIC_SITE_URL: https://mautic.${PLATFORM_DOMAIN}
       MAUTIC_DB_HOST: mautic-db
@@ -100,7 +104,7 @@ services:
       - traefik.http.services.mautic.loadbalancer.server.port=80
 
       # Edge secret: set on the protected router (overwriting any client value),
-      # removed on the public one. With MPASS_EDGE_SECRET empty, both remove it.
+      # removed on the public one.
       - traefik.http.middlewares.mautic-edge-secret.headers.customrequestheaders.X-Mpass-Edge-Secret=${MPASS_EDGE_SECRET:-}
       - traefik.http.middlewares.mautic-strip-edge-secret.headers.customrequestheaders.X-Mpass-Edge-Secret=
 

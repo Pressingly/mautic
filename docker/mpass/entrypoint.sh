@@ -24,7 +24,10 @@
 # SSO settings read by the app at runtime, never written to any Mautic config file:
 #   AUTH_TYPE=SSO, DEFAULT_EMAIL_DOMAIN, SMB_CORPORATE_ID (or MPASS_ALLOW_ANY_TENANT=1),
 #   LOGOUT_REDIRECT_URL, MPASS_SSO_DEFAULT_ROLE (optional role id; default the "mPass Member" role),
-#   MPASS_EDGE_SECRET (optional, >= 32 chars when set; the protected Traefik router must inject it)
+#   MPASS_EDGE_SECRET (required, >= 32 chars; the protected Traefik router injects it. Unset, short or
+#   a CHANGE_ME_ placeholder: identity headers are never trusted, so nobody can sign in, logged at startup),
+#   MPASS_COGNITO_ISSUER_URL (or COGNITO_AWS_REGION + COGNITO_USER_POOL_ID), MPASS_TOKEN_ISSUER_URL
+#   (optional), MPASS_OIDC_CLIENT_ID: verify the forwarded token when SMB_CORPORATE_ID is set
 # Full list: doc/mpass_sso.md.
 #
 # Persist /var/www/html/config (local.php holds the generated secret_key), media/files and
@@ -33,6 +36,17 @@ set -eu
 cd /var/www/html
 
 fail() { echo "mautic-entrypoint: $*" >&2; exit 1; }
+warn() { echo "mautic-entrypoint: ERROR: $*" >&2; }
+trim() { printf '%s' "${1:-}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'; }
+# A setting's value, or empty when unset or still an .env.example CHANGE_ME_ placeholder.
+configured() { value="$(trim "${1:-}")"; case "$value" in CHANGE_ME_*) ;; *) printf '%s' "$value" ;; esac; }
+# Mirrors MpassTokenVerifier::isConfigured(): a client id and at least one trusted issuer.
+token_verifier_configured() {
+    [ -n "$(configured "${MPASS_OIDC_CLIENT_ID:-}")" ] || return 1
+    [ -n "$(configured "${MPASS_COGNITO_ISSUER_URL:-}")" ] && return 0
+    [ -n "$(configured "${MPASS_TOKEN_ISSUER_URL:-}")" ] && return 0
+    [ -n "$(configured "${COGNITO_AWS_REGION:-}")" ] && [ -n "$(configured "${COGNITO_USER_POOL_ID:-}")" ]
+}
 
 : "${MAUTIC_SITE_URL:?MAUTIC_SITE_URL is required}"
 
@@ -41,15 +55,19 @@ if [ "${AUTH_TYPE:-}" = "SSO" ]; then
     # app/config/config_prod.php loads config/security_local.php INSTEAD of app/config/security.php
     # when it exists, which would drop the mPass authenticator from the main firewall.
     [ -e config/security_local.php ] && fail "config/security_local.php replaces the SSO firewall; refusing to start"
-    # The edge secret is optional (unset = topology trust, as in the platform contract). Set, a
-    # short one is guessable by anything on the bundle networks, and ProxyIdentity would trust nothing.
-    edge_secret="${MPASS_EDGE_SECRET:-}"
-    if [ -n "$edge_secret" ] && [ "${#edge_secret}" -lt 32 ]; then
-        fail "MPASS_EDGE_SECRET must be at least 32 characters when set"
+    # Without a usable secret the app trusts no identity header (fail closed): mPass sign-in is
+    # off, but landing pages, forms, tracking, the API and cron keep working, so this is logged
+    # rather than fatal. Under 32 characters it is guessable by anything on the bundle networks.
+    edge_secret="$(configured "${MPASS_EDGE_SECRET:-}")"
+    if [ "${#edge_secret}" -lt 32 ]; then
+        warn "MPASS_EDGE_SECRET is unset, a CHANGE_ME_ placeholder or shorter than 32 characters: mPass identity headers are ignored and nobody can sign in"
+    fi
+    if [ -n "$(configured "${SMB_CORPORATE_ID:-}")" ] && ! token_verifier_configured; then
+        warn "SMB_CORPORATE_ID is set but no token issuer or client id is configured (MPASS_COGNITO_ISSUER_URL, MPASS_OIDC_CLIENT_ID): every mPass login will be refused"
     fi
     # Without a corporate binding every principal in the Cognito pool gets a seat. Allowed only
     # when the deployment says so explicitly.
-    if [ -z "${SMB_CORPORATE_ID:-}" ] && [ "${MPASS_ALLOW_ANY_TENANT:-}" != "1" ]; then
+    if [ -z "$(configured "${SMB_CORPORATE_ID:-}")" ] && [ "${MPASS_ALLOW_ANY_TENANT:-}" != "1" ]; then
         fail "AUTH_TYPE=SSO needs SMB_CORPORATE_ID, or MPASS_ALLOW_ANY_TENANT=1 to admit the whole pool"
     fi
 fi
@@ -60,7 +78,7 @@ case "$ttl" in ''|*[!0-9]*) fail "SESSION_COOKIE_MAX_AGE_SECONDS must be a posit
 
 # Command mode, for cron/worker containers: `mautic-entrypoint php bin/console mautic:campaigns:trigger`.
 # Same image, same volumes and the SAME SSO environment as the web container (AUTH_TYPE,
-# MPASS_EDGE_SECRET, SMB_CORPORATE_ID or MPASS_ALLOW_ANY_TENANT, ...), so the checks above ran and
+# MPASS_EDGE_SECRET, the token issuer settings, SMB_CORPORATE_ID or MPASS_ALLOW_ANY_TENANT, ...), so the checks above ran and
 # e.g. the outbound guard is on for campaign webhooks fired by cron. No install, no warm-up: the web
 # container owns those; the command runs as www-data against the installed config/.
 if [ "$#" -gt 0 ] && [ "$1" != "apache2-foreground" ]; then
@@ -168,14 +186,15 @@ export MAUTIC_SERVER_NAME
 # The edge secret reaches Apache as a file, not as an environment variable: under mod_php the
 # Apache environment is visible to phpinfo() and any environment dump. Root-owned, readable by
 # www-data only; ProxyIdentity reads MPASS_EDGE_SECRET_FILE.
-if [ -n "${MPASS_EDGE_SECRET:-}" ]; then
+edge_secret="$(configured "${MPASS_EDGE_SECRET:-}")"
+if [ -n "$edge_secret" ]; then
     mkdir -p /run/mpass
     umask 077
-    printf '%s' "$MPASS_EDGE_SECRET" > /run/mpass/edge-secret
+    printf '%s' "$edge_secret" > /run/mpass/edge-secret
     chown root:www-data /run/mpass /run/mpass/edge-secret
     chmod 0750 /run/mpass
     chmod 0440 /run/mpass/edge-secret
     export MPASS_EDGE_SECRET_FILE=/run/mpass/edge-secret
-    unset MPASS_EDGE_SECRET
 fi
+unset MPASS_EDGE_SECRET edge_secret
 exec "$@"

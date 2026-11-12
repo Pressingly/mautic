@@ -17,10 +17,27 @@ final class MpassRefusalException extends AuthenticationException
     public const INACTIVE      = 'inactive';
     public const ROLE          = 'role';
     public const CONFLICT      = 'conflict';
+    public const TOKEN         = 'token';
 
-    public function __construct(public readonly string $reason, ?\Throwable $previous = null)
+    public const NOT_CORPORATE      = 'not_corporate';
+    public const WRONG_ORGANIZATION = 'wrong_organization';
+
+    /**
+     * @param string $detail a finer reason code for the log (e.g. an MpassTokenException reason), never shown
+     */
+    public function __construct(public readonly string $reason, ?\Throwable $previous = null, public readonly string $detail = '')
     {
         parent::__construct('mPass identity refused: '.$reason, 0, $previous);
+    }
+
+    /**
+     * Only a verified token naming another tenant ends an established session. Anything else (a
+     * token missing, expired between refreshes, or unverifiable while the JWKS is unreachable) is
+     * survived by an established session and refused for a new one.
+     */
+    public function endsEstablishedSession(): bool
+    {
+        return self::CORPORATE === $this->reason && in_array($this->detail, [self::NOT_CORPORATE, self::WRONG_ORGANIZATION], true);
     }
 
     public function getMessageKey(): string

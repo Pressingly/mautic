@@ -42,8 +42,6 @@ start() { # extra docker args
 }
 
 echo "== entrypoint refusals"
-# The edge secret is optional (unset = topology trust); only a short one is refused.
-refuses "short MPASS_EDGE_SECRET under SSO" "MPASS_EDGE_SECRET" -e AUTH_TYPE=SSO -e MPASS_EDGE_SECRET=short -e MPASS_ALLOW_ANY_TENANT=1
 refuses "no SMB_CORPORATE_ID and no MPASS_ALLOW_ANY_TENANT" "SMB_CORPORATE_ID" -e AUTH_TYPE=SSO -e MPASS_EDGE_SECRET=$SECRET
 refuses "SESSION_COOKIE_MAX_AGE_SECONDS=0" "SESSION_COOKIE_MAX_AGE_SECONDS" "${sso_env[@]}" -e SESSION_COOKIE_MAX_AGE_SECONDS=0
 

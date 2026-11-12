@@ -43,7 +43,10 @@ Mautic's native SAML is not used under SSO; the platform relies on the header co
 | `SMB_CORPORATE_ID` | one of these two | Only principals whose access token has `custom:is_corporate=true` and this `custom:corporate_id` are admitted |
 | `MPASS_ALLOW_ANY_TENANT` | | `1` admits every mPass principal when `SMB_CORPORATE_ID` is unset. See [Trade-offs](#trade-offs) |
 | `MPASS_SSO_DEFAULT_ROLE` | no | Role id new SSO users get. Unset: the role named `mPass Member`, which the image creates at boot. Must be a published, non-admin role |
-| `MPASS_EDGE_SECRET` / `MPASS_EDGE_SECRET_FILE` | no | Optional edge secret; see [Header trust](#header-trust) |
+| `MPASS_EDGE_SECRET` / `MPASS_EDGE_SECRET_FILE` | yes | Edge secret, at least 32 characters. Unset, shorter or a `CHANGE_ME_` placeholder: no identity header is trusted, so nobody can sign in (logged as an error). See [Header trust](#header-trust) |
+| `MPASS_COGNITO_ISSUER_URL` | with `SMB_CORPORATE_ID` | Cognito issuer the forwarded token is verified against. Fallback: built from `COGNITO_AWS_REGION` + `COGNITO_USER_POOL_ID` |
+| `MPASS_TOKEN_ISSUER_URL` | no | mpass-auth-proxy's issuer, for the id_tokens it re-signs (Bearer callers with email capture on) |
+| `MPASS_OIDC_CLIENT_ID` | with `SMB_CORPORATE_ID` | The token's audience: `client_id` of an access token, `aud` of an id_token |
 | `MAUTIC_SITE_URL` | yes | The https URL users see. Written to `site_url` |
 | `MAUTIC_DB_HOST`, `MAUTIC_DB_PORT` (3306), `MAUTIC_DB_NAME`, `MAUTIC_DB_USER`, `MAUTIC_DB_PASSWORD` | yes | MariaDB/MySQL connection, used for the install |
 | `TRUSTED_PROXIES` | yes behind Traefik | Comma-separated CIDRs Traefik's requests come from, so `X-Forwarded-Proto` and the client IP are honoured |
@@ -54,21 +57,35 @@ parses it as JSON, which `TrustMiddleware` ignores.
 
 ## Header trust
 
-Header trust is topology-based, the same as every bundle app:
+Header trust needs the network path and the edge secret:
 
 1. Mautic's port is never published; Traefik is the only way in.
 2. Every Mautic router runs `strip-auth-headers` first, so a client cannot inject
    `X-Auth-Request-*`; on the protected router `mpass-auth` then sets the verified values.
 3. oauth2-proxy validates the upstream session on every ForwardAuth call.
 
-**Optional edge secret.** Topology trust does not cover another container on the same Docker
-networks, which can reach Apache directly with any header. Setting `MPASS_EDGE_SECRET`
-(at least 32 characters) closes that: the protected router adds `X-Mpass-Edge-Secret` with the
-value, every other Mautic router strips a client copy, and Mautic then trusts identity headers
-only on a request carrying it (constant-time compare). Admin-UI requests without it get `403`.
-The image moves the value into a root-owned file (`MPASS_EDGE_SECRET_FILE`) before Apache starts,
-so `phpinfo()` and environment dumps cannot show it. Unset, Mautic trusts topology, as the
-platform contract describes.
+**Required edge secret.** Topology alone does not cover another container on the same Docker
+networks, which can reach Apache directly with any header. The protected router adds
+`X-Mpass-Edge-Secret` with `MPASS_EDGE_SECRET` (at least 32 characters), every other Mautic router
+strips a client copy, and Mautic trusts identity headers only on a request carrying it
+(constant-time compare). Admin-UI requests without it get `403`; identity headers on any other
+path without it are ignored and logged (mPass id, path, socket address; never the email; at most
+once a minute per caller). With no usable secret (unset, under 32 characters after trimming, or a
+`CHANGE_ME_` placeholder) nothing is trusted: mPass sign-in is off, the entrypoint and every
+refused admin request log an error, and the public surface, the API and cron keep working. The
+image moves the value into a root-owned file (`MPASS_EDGE_SECRET_FILE`) before Apache starts, so
+`phpinfo()` and environment dumps cannot show it.
+
+**Verified token.** With `SMB_CORPORATE_ID` set, `X-Auth-Request-Access-Token` is verified before
+its corporate claims count: RS256 only, signature against the issuer's JWKS, `exp`/`iat`/`iss`/
+`token_use` required, 60s leeway, issuer one of `MPASS_COGNITO_ISSUER_URL` (or the region + pool
+fallback) and `MPASS_TOKEN_ISSUER_URL`, audience `MPASS_OIDC_CLIENT_ID`. The JWKS is cached for an
+hour in `cache.app`, fetched with a 2s timeout and no redirects, a failed fetch backs off 30s, and
+the last good set keeps serving for 24h after a failed refresh; a key that does not import is
+skipped. A new session needs a verified token. On an established session only a verified token
+naming another tenant ends it; a token that cannot be verified right now (expired between
+refreshes, missing, JWKS down) is logged and the session continues. mpass-auth-proxy enforces the
+corporate id at login and on every refresh.
 
 Mautic's own outbound HTTP cannot be used to forge headers either way: under SSO,
 `MpassOutboundGuard` keeps the campaign "Send a webhook" action and form "repost" off private,
@@ -186,8 +203,8 @@ pages are a catch-all slug (`/{slug}`) and cannot be allow-listed:
 
 | Router | Rule | Middlewares |
 |---|---|---|
-| `mautic-secure` | `PathRegexp(^(/index\.php)?/(s(/\|$)\|elfinder\|efconnect\|installer\|api(/\|$)\|oauth(/\|$)))`, priority 20 | `strip-auth-headers`, `security-headers`, `mpass-auth` (+ the edge-secret injector when used) |
-| `mautic-public` | everything else on the host, priority 10 | `strip-auth-headers`, `mautic-public-headers` (+ the edge-secret strip when used) |
+| `mautic-secure` | `PathRegexp(^(/index\.php)?/(s(/\|$)\|elfinder\|efconnect\|installer\|api(/\|$)\|oauth(/\|$)))`, priority 20 | `strip-auth-headers`, `security-headers`, `mpass-auth`, the edge-secret injector |
+| `mautic-public` | everything else on the host, priority 10 | `strip-auth-headers`, the edge-secret strip, `mautic-public-headers` |
 
 `mautic-public-headers` is the devkit's `security-headers` set without `X-Frame-Options`. Public
 forms are embedded "via iframe" (`/form/{id}`, `/form/embed/{id}`) and landing pages may be framed
@@ -221,8 +238,8 @@ Public, and why (all anonymous by construction, since identity headers are strip
 **Residual.** If Traefik and Mautic ever disagree about whether a path is the admin UI (an
 encoding or normalisation Traefik does not resolve to `/s/`), that request would reach Mautic
 without `mpass-auth`, and a surviving Mautic session cookie alone would serve it. Go-side decoding
-of `%XX` and Symfony's single `rawurldecode` agree on every case we know of. Setting
-`MPASS_EDGE_SECRET` closes this regardless: an admin-UI request that did not come through
+of `%XX` and Symfony's single `rawurldecode` agree on every case we know of. The
+required `MPASS_EDGE_SECRET` closes this regardless: an admin-UI request that did not come through
 `mautic-secure` has no secret and gets `403`.
 
 ## Operations
@@ -238,15 +255,16 @@ docker buildx build --platform linux/amd64 -t <registry>/mautic:<tag> --push .
 **What the entrypoint does at boot** (don't duplicate it in provisioning):
 
 1. Under SSO, refuse an unsafe configuration: a `config/security_local.php` (it would replace the
-   SSO firewall), a set but short `MPASS_EDGE_SECRET`, or no `SMB_CORPORATE_ID` without
-   `MPASS_ALLOW_ANY_TENANT=1`. Also refuse a non-positive session TTL.
+   SSO firewall), or no `SMB_CORPORATE_ID` without `MPASS_ALLOW_ANY_TENANT=1`. Also refuse a
+   non-positive session TTL. Log an error, without refusing, when `MPASS_EDGE_SECRET` is not
+   usable or `SMB_CORPORATE_ID` is set without the token issuer and client id.
 2. `mautic:install` from the CLI on first start only (DB credentials and a placeholder admin are
    seeded into `config/local.php`, then the admin keys are removed).
 3. Render `config/parameters_local.php`: `site_url`, `trusted_proxies`, `trusted_hosts`.
 4. Render the php.ini session settings from `SESSION_COOKIE_MAX_AGE_SECONDS`.
 5. `cache:warmup --env=prod` (after `site_url` exists, so the session cookie is `secure`).
 6. Under SSO, create the `mPass Member` role (marketer permissions) if missing.
-7. Start Apache; the edge secret, if set, is moved into `/run/mpass/edge-secret`.
+7. Start Apache; the edge secret is moved into `/run/mpass/edge-secret`.
 
 **Processes.** One image:
 

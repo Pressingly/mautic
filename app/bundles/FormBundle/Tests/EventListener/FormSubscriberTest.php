@@ -17,11 +17,15 @@ use Mautic\FormBundle\Event\SubmissionEvent;
 use Mautic\FormBundle\EventListener\FormSubscriber;
 use Mautic\LeadBundle\Entity\Lead;
 use Mautic\UserBundle\Entity\User;
+use Mautic\UserBundle\Security\Mpass\MpassJwks;
 use Mautic\UserBundle\Security\Mpass\MpassOutboundGuard;
+use Mautic\UserBundle\Security\Mpass\MpassTokenVerifier;
 use Mautic\UserBundle\Security\Mpass\ProxyIdentity;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
+use Symfony\Component\Cache\Adapter\ArrayAdapter;
+use Symfony\Component\HttpClient\MockHttpClient;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\Routing\RouterInterface;
 use Symfony\Contracts\Translation\TranslatorInterface;
@@ -50,7 +54,7 @@ final class FormSubscriberTest extends TestCase
             $this->createStub(TranslatorInterface::class),
             $this->createStub(RouterInterface::class),
             $this->createStub(LanguageHelper::class),
-            new MpassOutboundGuard(new ProxyIdentity(null, null, null), $this->createStub(CoreParametersHelper::class)),
+            new MpassOutboundGuard(new ProxyIdentity(null, null, null, new MpassTokenVerifier(new MpassJwks(new MockHttpClient(), new ArrayAdapter()))), $this->createStub(CoreParametersHelper::class)),
         );
     }
 
