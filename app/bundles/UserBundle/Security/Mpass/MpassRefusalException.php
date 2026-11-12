@@ -31,9 +31,10 @@ final class MpassRefusalException extends AuthenticationException
     }
 
     /**
-     * Only a verified token naming another tenant ends an established session. Anything else (a
-     * token missing, expired between refreshes, or unverifiable while the JWKS is unreachable) is
-     * survived by an established session and refused for a new one.
+     * Only a verified token naming another tenant ends an established session. Every other
+     * refusal, transient or not (missing, expired, bad signature, untrusted issuer, wrong audience,
+     * JWKS down, verifier not configured), is logged and survived by an established session, and
+     * refused for a new one.
      */
     public function endsEstablishedSession(): bool
     {

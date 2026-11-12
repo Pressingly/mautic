@@ -83,8 +83,9 @@ fallback) and `MPASS_TOKEN_ISSUER_URL`, audience `MPASS_OIDC_CLIENT_ID`. The JWK
 hour in `cache.app`, fetched with a 2s timeout and no redirects, a failed fetch backs off 30s, and
 the last good set keeps serving for 24h after a failed refresh; a key that does not import is
 skipped. A new session needs a verified token. On an established session only a verified token
-naming another tenant ends it; a token that cannot be verified right now (expired between
-refreshes, missing, JWKS down) is logged and the session continues. mpass-auth-proxy enforces the
+naming another tenant (`not_corporate`, `wrong_organization`) ends it. Every other verification
+failure, transient or not (missing, expired, bad signature, untrusted issuer, wrong audience, JWKS
+down, verifier not configured), is logged and the session continues, as in the other bundle apps. mpass-auth-proxy enforces the
 corporate id at login and on every refresh.
 
 Mautic's own outbound HTTP cannot be used to forge headers either way: under SSO,

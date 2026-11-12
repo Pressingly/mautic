@@ -93,9 +93,11 @@ final class MpassProxyAuthenticator extends AbstractAuthenticator implements Int
 
     /**
      * The per-request re-check on an established session. Only a verified token naming another
-     * tenant ends it; a token that cannot be verified right now is
-     * logged and the session continues, so an issuer outage cannot sign everyone out.
-     * mpass-auth-proxy enforces the corporate id at login and on every refresh.
+     * tenant (not_corporate, wrong_organization) ends it. Every other failure, transient or not
+     * (missing, expired, bad signature, untrusted issuer, wrong audience, JWKS down, verifier not
+     * configured), is logged and the session continues, so an issuer outage cannot sign everyone
+     * out; the same as the other bundle apps. mpass-auth-proxy enforces the corporate id at login
+     * and on every refresh, and a new session always needs a verified token.
      */
     private function sessionLosesCorporateBinding(Request $request): bool
     {

@@ -126,6 +126,21 @@ final class MpassTokenVerifierTest extends TestCase
         yield 'no keys'        => [fn (): MockResponse => self::json(['keys' => []])];
         yield 'garbage key'    => [fn (): MockResponse => self::json(['keys' => [['kty' => 'RSA', 'kid' => MpassTestTokens::KID]]])];
         yield 'timeout'        => [fn (): MockResponse => throw new TransportException('Idle timeout reached')];
+        yield 'non-RSA kty'    => [fn (): MockResponse => self::json(['keys' => [['kty' => 'EC'] + MpassTestTokens::jwks()['keys'][0]]])];
+    }
+
+    public function testAKeyThatDoesNotImportIsSkippedNotFatal(): void
+    {
+        $good = MpassTestTokens::jwks()['keys'][0];
+        $this->responses[MpassTestTokens::jwksUrl()] = fn (): MockResponse => self::json(['keys' => [
+            ['kty' => 'oct', 'kid' => 'symmetric', 'k' => 'c2VjcmV0'],
+            ['kty' => 'EC', 'kid' => 'mislabelled'] + $good,
+            ['kty' => 'RSA', 'kid' => 'no-modulus'],
+            $good,
+        ]]);
+
+        $this->assertSame(MpassTestTokens::CLIENT_ID, $this->verifier()->verify(MpassTestTokens::accessToken())['client_id']);
+        $this->assertRejected(MpassTokenException::UNKNOWN_SIGNING_KEY, $this->verifier(), MpassTestTokens::accessToken([], 'issuer', 'mislabelled'));
     }
 
     #[DataProvider('jwksFailures')]

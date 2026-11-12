@@ -58,7 +58,11 @@ if [ "${AUTH_TYPE:-}" = "SSO" ]; then
     # Without a usable secret the app trusts no identity header (fail closed): mPass sign-in is
     # off, but landing pages, forms, tracking, the API and cron keep working, so this is logged
     # rather than fatal. Under 32 characters it is guessable by anything on the bundle networks.
+    # The same rule as ProxyIdentity: the env value, else a mounted MPASS_EDGE_SECRET_FILE.
     edge_secret="$(configured "${MPASS_EDGE_SECRET:-}")"
+    if [ -z "$edge_secret" ] && [ -n "${MPASS_EDGE_SECRET_FILE:-}" ] && [ -r "$MPASS_EDGE_SECRET_FILE" ]; then
+        edge_secret="$(configured "$(cat "$MPASS_EDGE_SECRET_FILE")")"
+    fi
     if [ "${#edge_secret}" -lt 32 ]; then
         warn "MPASS_EDGE_SECRET is unset, a CHANGE_ME_ placeholder or shorter than 32 characters: mPass identity headers are ignored and nobody can sign in"
     fi

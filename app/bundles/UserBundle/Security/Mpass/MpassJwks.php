@@ -180,8 +180,8 @@ final readonly class MpassJwks
     }
 
     /**
-     * The RS256 keys that import; a key that does not (wrong type, missing n/e, no kid) is skipped
-     * rather than failing the whole set.
+     * The RS256 keys that import; any other key (no kid, kty other than RSA, missing or invalid
+     * n/e) is skipped rather than failing the whole set.
      *
      * @param array<string, mixed> $jwks
      *
@@ -202,10 +202,16 @@ final readonly class MpassJwks
     }
 
     /**
+     * An RSA key as an RS256 Key, or null for anything else. kty is checked first so an EC or oct
+     * key is never handed to the parser with the RS256 algorithm forced on it.
+     *
      * @param array<string, mixed> $jwk
      */
     private static function importKey(array $jwk): ?Key
     {
+        if ('RSA' !== ($jwk['kty'] ?? null)) {
+            return null;
+        }
         try {
             $key = JWK::parseKey($jwk, MpassTokenVerifier::ALGORITHM);
         } catch (\UnexpectedValueException|\InvalidArgumentException|\DomainException) {

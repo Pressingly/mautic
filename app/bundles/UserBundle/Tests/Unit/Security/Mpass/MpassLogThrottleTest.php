@@ -15,7 +15,7 @@ final class MpassLogThrottleTest extends TestCase
     public function testTheSameEventIsLoggedOncePerWindowPerThrottleKey(): void
     {
         $logger   = self::recordingLogger();
-        $throttle = new MpassLogThrottle($logger, new ArrayAdapter());
+        $throttle = new MpassLogThrottle($logger, new ArrayAdapter(), static fn (string $line): null => null);
 
         foreach (['mpass-1', 'mpass-2', 'mpass-3'] as $spoofedId) {
             $throttle->log(LogLevel::WARNING, 'mPass identity headers ignored', ['mpass_id' => $spoofedId], '10.0.0.9');
@@ -29,11 +29,25 @@ final class MpassLogThrottleTest extends TestCase
         );
     }
 
+    public function testErrorsAlsoReachStderrThrottledAndWarningsDoNot(): void
+    {
+        $lines    = [];
+        $throttle = new MpassLogThrottle(self::recordingLogger(), new ArrayAdapter(), static function (string $line) use (&$lines): void {
+            $lines[] = $line;
+        });
+
+        $throttle->log(LogLevel::ERROR, 'mPass SSO is off', ['mpass_id' => '-', 'path' => '/s/dashboard'], '10.0.0.9');
+        $throttle->log(LogLevel::ERROR, 'mPass SSO is off', ['mpass_id' => '-', 'path' => '/s/dashboard'], '10.0.0.9');
+        $throttle->log(LogLevel::WARNING, 'mPass identity headers ignored', ['mpass_id' => 'mpass-1'], '10.0.0.9');
+
+        $this->assertSame(['mautic error: mPass SSO is off {"mpass_id":"-","path":"/s/dashboard"}'], $lines);
+    }
+
     public function testTheWindowExpires(): void
     {
         $logger   = self::recordingLogger();
         $cache    = new ArrayAdapter();
-        $throttle = new MpassLogThrottle($logger, $cache);
+        $throttle = new MpassLogThrottle($logger, $cache, static fn (string $line): null => null);
 
         $throttle->log(LogLevel::ERROR, 'mPass SSO is off', ['mpass_id' => '-'], '10.0.0.9');
         $cache->clear();

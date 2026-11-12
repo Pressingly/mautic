@@ -420,8 +420,8 @@ final class MpassProxyAuthenticatorTest extends AbstractMpassTestCase
 
     /**
      * The re-check on an established session ends it only for a verified token naming another
-     * tenant. A token that cannot be verified right now (expired between refreshes, missing, JWKS
-     * down) keeps the session; a new session from the same token is still refused.
+     * tenant. Any other verification failure (expired, missing, bad signature, JWKS down) keeps
+     * the session; a new session from the same token is still refused.
      */
     public function testEstablishedSessionSurvivesAnUnverifiableTokenButNotAVerifiedMismatch(): void
     {
