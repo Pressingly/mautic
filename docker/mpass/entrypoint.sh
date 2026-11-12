@@ -41,6 +41,16 @@ trim() { printf '%s' "${1:-}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//
 # A setting's value, or empty when unset or still an .env.example CHANGE_ME_ placeholder.
 configured() { value="$(trim "${1:-}")"; case "$value" in CHANGE_ME_*) ;; *) printf '%s' "$value" ;; esac; }
 # Mirrors MpassTokenVerifier::isConfigured(): a client id and at least one trusted issuer.
+# The edge secret from MPASS_EDGE_SECRET, else from a mounted MPASS_EDGE_SECRET_FILE, read here as
+# root. Apache gets it only through the copy in /run/mpass/edge-secret, so a file www-data cannot
+# read (a root-owned 0400 Kubernetes secret) still works.
+edge_secret_value() {
+    value="$(configured "${MPASS_EDGE_SECRET:-}")"
+    if [ -z "$value" ] && [ -n "${MPASS_EDGE_SECRET_FILE:-}" ] && [ -r "$MPASS_EDGE_SECRET_FILE" ]; then
+        value="$(configured "$(cat "$MPASS_EDGE_SECRET_FILE")")"
+    fi
+    printf '%s' "$value"
+}
 token_verifier_configured() {
     [ -n "$(configured "${MPASS_OIDC_CLIENT_ID:-}")" ] || return 1
     [ -n "$(configured "${MPASS_COGNITO_ISSUER_URL:-}")" ] && return 0
@@ -58,11 +68,7 @@ if [ "${AUTH_TYPE:-}" = "SSO" ]; then
     # Without a usable secret the app trusts no identity header (fail closed): mPass sign-in is
     # off, but landing pages, forms, tracking, the API and cron keep working, so this is logged
     # rather than fatal. Under 32 characters it is guessable by anything on the bundle networks.
-    # The same rule as ProxyIdentity: the env value, else a mounted MPASS_EDGE_SECRET_FILE.
-    edge_secret="$(configured "${MPASS_EDGE_SECRET:-}")"
-    if [ -z "$edge_secret" ] && [ -n "${MPASS_EDGE_SECRET_FILE:-}" ] && [ -r "$MPASS_EDGE_SECRET_FILE" ]; then
-        edge_secret="$(configured "$(cat "$MPASS_EDGE_SECRET_FILE")")"
-    fi
+    edge_secret="$(edge_secret_value)"
     if [ "${#edge_secret}" -lt 32 ]; then
         warn "MPASS_EDGE_SECRET is unset, a CHANGE_ME_ placeholder or shorter than 32 characters: mPass identity headers are ignored and nobody can sign in"
     fi
@@ -190,7 +196,7 @@ export MAUTIC_SERVER_NAME
 # The edge secret reaches Apache as a file, not as an environment variable: under mod_php the
 # Apache environment is visible to phpinfo() and any environment dump. Root-owned, readable by
 # www-data only; ProxyIdentity reads MPASS_EDGE_SECRET_FILE.
-edge_secret="$(configured "${MPASS_EDGE_SECRET:-}")"
+edge_secret="$(edge_secret_value)"
 if [ -n "$edge_secret" ]; then
     mkdir -p /run/mpass
     umask 077
