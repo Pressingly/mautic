@@ -58,38 +58,41 @@ final class MpassTokenVerifierTest extends TestCase
     }
 
     /**
-     * @return iterable<string, array{string, string}>
+     * Tokens are minted when the test runs, not when the provider does: PHPUnit builds every data
+     * set before the suite starts, and a full run outlasts the 600s nbf and the default exp.
+     *
+     * @return iterable<string, array{callable(): string, string}>
      */
     public static function rejectedTokens(): iterable
     {
-        yield 'bad signature'           => [MpassTestTokens::accessToken([], 'attacker'), MpassTokenException::BAD_SIGNATURE];
-        yield 'expired'                 => [MpassTestTokens::accessToken(['exp' => time() - 120]), MpassTokenException::EXPIRED];
-        yield 'not yet valid'           => [MpassTestTokens::accessToken(['nbf' => time() + 600]), MpassTokenException::NOT_YET_VALID];
-        yield 'wrong issuer'            => [MpassTestTokens::accessToken(['iss' => 'https://cognito-idp.test-region-1.amazonaws.com/other_pool']), MpassTokenException::UNTRUSTED_ISSUER];
-        yield 'issuer trailing slash'   => [MpassTestTokens::accessToken(['iss' => MpassTestTokens::ISSUER.'/']), MpassTokenException::UNTRUSTED_ISSUER];
-        yield 'missing issuer'          => [MpassTestTokens::accessToken(['iss' => null]), MpassTokenException::UNTRUSTED_ISSUER];
-        yield 'access, wrong client_id' => [MpassTestTokens::accessToken(['client_id' => 'another-client']), MpassTokenException::WRONG_AUDIENCE];
-        yield 'access, aud only'        => [MpassTestTokens::accessToken(['client_id' => null, 'aud' => MpassTestTokens::CLIENT_ID]), MpassTokenException::WRONG_AUDIENCE];
-        yield 'id, wrong aud'           => [MpassTestTokens::idToken(['aud' => 'another-client'], 'proxy', 'proxy-kid'), MpassTokenException::WRONG_AUDIENCE];
-        yield 'unknown token_use'       => [MpassTestTokens::accessToken(['token_use' => 'refresh']), MpassTokenException::WRONG_AUDIENCE];
-        yield 'missing token_use'       => [MpassTestTokens::accessToken(['token_use' => null]), MpassTokenException::MISSING_CLAIM];
-        yield 'missing iat'             => [MpassTestTokens::accessToken(['iat' => null]), MpassTokenException::MISSING_CLAIM];
-        yield 'missing exp'             => [MpassTestTokens::accessToken(['exp' => null]), MpassTokenException::MISSING_CLAIM];
-        yield 'alg none'                => [MpassTestTokens::unsigned(['alg' => 'none', 'kid' => MpassTestTokens::KID], []), MpassTokenException::UNSUPPORTED_ALGORITHM];
-        yield 'HS256 with public key'   => [MpassTestTokens::hs256WithPublicKey(), MpassTokenException::UNSUPPORTED_ALGORITHM];
-        yield 'no kid'                  => [MpassTestTokens::unsigned(['alg' => 'RS256'], []), MpassTokenException::MALFORMED];
-        yield 'unknown kid'             => [MpassTestTokens::accessToken([], 'issuer', 'rotated-away'), MpassTokenException::UNKNOWN_SIGNING_KEY];
-        yield 'proxy token, Cognito key' => [MpassTestTokens::idToken([], 'issuer'), MpassTokenException::UNKNOWN_SIGNING_KEY];
-        yield 'empty'                   => ['', MpassTokenException::MISSING];
-        yield 'not a JWT'               => ['not-a-jwt', MpassTokenException::MALFORMED];
-        yield 'bad base64'              => ['a.!!!.c', MpassTokenException::MALFORMED];
-        yield 'payload not an object'   => [JWT::urlsafeB64Encode('{"alg":"RS256","kid":"k"}').'.'.JWT::urlsafeB64Encode('"a string"').'.c', MpassTokenException::MALFORMED];
+        yield 'bad signature'           => [static fn (): string => MpassTestTokens::accessToken([], 'attacker'), MpassTokenException::BAD_SIGNATURE];
+        yield 'expired'                 => [static fn (): string => MpassTestTokens::accessToken(['exp' => time() - 120]), MpassTokenException::EXPIRED];
+        yield 'not yet valid'           => [static fn (): string => MpassTestTokens::accessToken(['nbf' => time() + 600]), MpassTokenException::NOT_YET_VALID];
+        yield 'wrong issuer'            => [static fn (): string => MpassTestTokens::accessToken(['iss' => 'https://cognito-idp.test-region-1.amazonaws.com/other_pool']), MpassTokenException::UNTRUSTED_ISSUER];
+        yield 'issuer trailing slash'   => [static fn (): string => MpassTestTokens::accessToken(['iss' => MpassTestTokens::ISSUER.'/']), MpassTokenException::UNTRUSTED_ISSUER];
+        yield 'missing issuer'          => [static fn (): string => MpassTestTokens::accessToken(['iss' => null]), MpassTokenException::UNTRUSTED_ISSUER];
+        yield 'access, wrong client_id' => [static fn (): string => MpassTestTokens::accessToken(['client_id' => 'another-client']), MpassTokenException::WRONG_AUDIENCE];
+        yield 'access, aud only'        => [static fn (): string => MpassTestTokens::accessToken(['client_id' => null, 'aud' => MpassTestTokens::CLIENT_ID]), MpassTokenException::WRONG_AUDIENCE];
+        yield 'id, wrong aud'           => [static fn (): string => MpassTestTokens::idToken(['aud' => 'another-client'], 'proxy', 'proxy-kid'), MpassTokenException::WRONG_AUDIENCE];
+        yield 'unknown token_use'       => [static fn (): string => MpassTestTokens::accessToken(['token_use' => 'refresh']), MpassTokenException::WRONG_AUDIENCE];
+        yield 'missing token_use'       => [static fn (): string => MpassTestTokens::accessToken(['token_use' => null]), MpassTokenException::MISSING_CLAIM];
+        yield 'missing iat'             => [static fn (): string => MpassTestTokens::accessToken(['iat' => null]), MpassTokenException::MISSING_CLAIM];
+        yield 'missing exp'             => [static fn (): string => MpassTestTokens::accessToken(['exp' => null]), MpassTokenException::MISSING_CLAIM];
+        yield 'alg none'                => [static fn (): string => MpassTestTokens::unsigned(['alg' => 'none', 'kid' => MpassTestTokens::KID], []), MpassTokenException::UNSUPPORTED_ALGORITHM];
+        yield 'HS256 with public key'   => [MpassTestTokens::hs256WithPublicKey(...), MpassTokenException::UNSUPPORTED_ALGORITHM];
+        yield 'no kid'                  => [static fn (): string => MpassTestTokens::unsigned(['alg' => 'RS256'], []), MpassTokenException::MALFORMED];
+        yield 'unknown kid'             => [static fn (): string => MpassTestTokens::accessToken([], 'issuer', 'rotated-away'), MpassTokenException::UNKNOWN_SIGNING_KEY];
+        yield 'proxy token, Cognito key' => [static fn (): string => MpassTestTokens::idToken([], 'issuer'), MpassTokenException::UNKNOWN_SIGNING_KEY];
+        yield 'empty'                   => [static fn (): string => '', MpassTokenException::MISSING];
+        yield 'not a JWT'               => [static fn (): string => 'not-a-jwt', MpassTokenException::MALFORMED];
+        yield 'bad base64'              => [static fn (): string => 'a.!!!.c', MpassTokenException::MALFORMED];
+        yield 'payload not an object'   => [static fn (): string => JWT::urlsafeB64Encode('{"alg":"RS256","kid":"k"}').'.'.JWT::urlsafeB64Encode('"a string"').'.c', MpassTokenException::MALFORMED];
     }
 
     #[DataProvider('rejectedTokens')]
-    public function testRejectedTokens(string $token, string $reason): void
+    public function testRejectedTokens(callable $token, string $reason): void
     {
-        $this->assertRejected($reason, $this->verifier(), $token);
+        $this->assertRejected($reason, $this->verifier(), $token());
     }
 
     public function testUnconfiguredVerifierRejectsEverything(): void
