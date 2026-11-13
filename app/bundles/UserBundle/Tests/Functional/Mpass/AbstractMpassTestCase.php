@@ -8,7 +8,10 @@ use Mautic\CoreBundle\Test\MauticMysqlTestCase;
 use Mautic\UserBundle\Entity\Role;
 use Mautic\UserBundle\Entity\User;
 use Symfony\Component\BrowserKit\Cookie;
+use Symfony\Component\HttpClient\MockHttpClient;
+use Symfony\Component\HttpClient\Response\MockResponse;
 use Symfony\Component\HttpFoundation\Response;
+use Symfony\Contracts\HttpClient\HttpClientInterface;
 
 /**
  * Shared harness for the mPass SSO functional tests. Every request goes through the real kernel.
@@ -21,7 +24,10 @@ abstract class AbstractMpassTestCase extends MauticMysqlTestCase
 {
     protected $useCleanupRollback = false;
 
-    private const ENV = ['AUTH_TYPE', 'MPASS_SSO_DEFAULT_ROLE', 'DEFAULT_EMAIL_DOMAIN', 'SMB_CORPORATE_ID', 'LOGOUT_REDIRECT_URL', 'MPASS_EDGE_SECRET', 'MPASS_EDGE_SECRET_FILE', 'MPASS_ALLOW_ANY_TENANT'];
+    private const ENV = [
+        'AUTH_TYPE', 'MPASS_SSO_DEFAULT_ROLE', 'DEFAULT_EMAIL_DOMAIN', 'SMB_CORPORATE_ID', 'LOGOUT_REDIRECT_URL', 'MPASS_EDGE_SECRET', 'MPASS_EDGE_SECRET_FILE', 'MPASS_ALLOW_ANY_TENANT',
+        'MPASS_COGNITO_ISSUER_URL', 'MPASS_TOKEN_ISSUER_URL', 'MPASS_OIDC_CLIENT_ID', 'COGNITO_AWS_REGION', 'COGNITO_USER_POOL_ID',
+    ];
 
     /** What the protected Traefik router injects; tests send it wherever the edge would. */
     protected const EDGE_SECRET = 'test-edge-secret-0123456789abcdef0123456789';
@@ -30,13 +36,31 @@ abstract class AbstractMpassTestCase extends MauticMysqlTestCase
 
     protected Role $memberRole;
 
+    /**
+     * What the token issuers' JWKS URLs answer, by URL; anything else gets an empty 200 as before.
+     *
+     * @var array<string, callable(): MockResponse>
+     */
+    protected array $jwksResponses = [];
+
+    /** @var list<string> */
+    protected array $jwksRequests = [];
+
     protected function setUp(): void
     {
         self::setEnv('AUTH_TYPE', 'SSO');
         self::setEnv('MPASS_EDGE_SECRET', self::EDGE_SECRET);
         // Tests run with SMB_CORPORATE_ID empty unless they set it; say so, as a deployment must.
         self::setEnv('MPASS_ALLOW_ANY_TENANT', '1');
+        self::setEnv('MPASS_COGNITO_ISSUER_URL', MpassTestTokens::ISSUER);
+        self::setEnv('MPASS_TOKEN_ISSUER_URL', MpassTestTokens::PROXY_ISSUER);
+        self::setEnv('MPASS_OIDC_CLIENT_ID', MpassTestTokens::CLIENT_ID);
+        $this->jwksResponses = [
+            MpassTestTokens::jwksUrl()                              => static fn (): MockResponse => self::jsonResponse(MpassTestTokens::jwks()),
+            MpassTestTokens::jwksUrl(MpassTestTokens::PROXY_ISSUER) => static fn (): MockResponse => self::jsonResponse(MpassTestTokens::jwks('proxy-kid', 'proxy')),
+        ];
         parent::setUp();
+        self::getContainer()->get('cache.app')->clear(); // @phpstan-ignore mautic.noContainerGet (the JWKS cache pool; no class-id alias)
 
         $this->adminRole  = $this->createRole('mPass test admins', true);
         $this->memberRole = $this->createRole('mPass test members', false);
@@ -75,9 +99,32 @@ abstract class AbstractMpassTestCase extends MauticMysqlTestCase
         $cookies = $this->client->getCookieJar()->all();
         $this->setUpSymfony($this->configParams);
         $this->client->followRedirects(false);
+        $this->serveJwks();
         foreach ($cookies as $cookie) {
             $this->client->getCookieJar()->set($cookie);
         }
+    }
+
+    private function serveJwks(): void
+    {
+        $httpClient = self::getContainer()->get(HttpClientInterface::class);
+        $this->assertInstanceOf(MockHttpClient::class, $httpClient);
+        $httpClient->setResponseFactory(function (string $method, string $url): MockResponse {
+            if (!isset($this->jwksResponses[$url])) {
+                return new MockResponse();
+            }
+            $this->jwksRequests[] = $url;
+
+            return ($this->jwksResponses[$url])();
+        });
+    }
+
+    /**
+     * @param array<string, mixed> $body
+     */
+    protected static function jsonResponse(array $body, int $status = 200): MockResponse
+    {
+        return new MockResponse((string) json_encode($body), ['http_code' => $status, 'response_headers' => ['Content-Type' => 'application/json']]);
     }
 
     /**

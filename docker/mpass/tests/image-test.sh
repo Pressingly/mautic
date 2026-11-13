@@ -42,8 +42,6 @@ start() { # extra docker args
 }
 
 echo "== entrypoint refusals"
-# The edge secret is optional (unset = topology trust); only a short one is refused.
-refuses "short MPASS_EDGE_SECRET under SSO" "MPASS_EDGE_SECRET" -e AUTH_TYPE=SSO -e MPASS_EDGE_SECRET=short -e MPASS_ALLOW_ANY_TENANT=1
 refuses "no SMB_CORPORATE_ID and no MPASS_ALLOW_ANY_TENANT" "SMB_CORPORATE_ID" -e AUTH_TYPE=SSO -e MPASS_EDGE_SECRET=$SECRET
 refuses "SESSION_COOKIE_MAX_AGE_SECONDS=0" "SESSION_COOKIE_MAX_AGE_SECONDS" "${sso_env[@]}" -e SESSION_COOKIE_MAX_AGE_SECONDS=0
 
@@ -106,6 +104,42 @@ out=$(docker run --rm --network "$NET" -v "$NAME-config:/var/www/html/config" "$
 check "command mode runs the command as www-data with the SSO env" '[ "$out" = "SSO:www-data" ]'
 out=$(docker run --rm --network "$NET" "${base_env[@]}" "${sso_env[@]}" "$IMAGE" php -r 'echo 1;' 2>&1); rc=$?
 check "command mode refuses before the web container has installed" '[ $rc -ne 0 ] && grep -q "not installed yet" <<<"$out"'
+
+echo "== fail closed: an unusable edge secret or a corporate binding without a token verifier"
+base_sso=(-e AUTH_TYPE=SSO -e MPASS_ALLOW_ANY_TENANT=1 -e SESSION_COOKIE_MAX_AGE_SECONDS=3600)
+admin_code() { curl_in -o /dev/null -w '%{http_code}' -H "Host: $HOST" -H "X-Forwarded-Proto: https" -H "X-Mpass-Edge-Secret: $1" -H "X-Auth-Request-Email: operator@image-test.example" "http://$NAME/s/account"; }
+public_code() { curl_in -o /dev/null -w '%{http_code}' -H "Host: $HOST" -H "X-Forwarded-Proto: https" "http://$NAME/mtc.js"; }
+starts_failing_closed() { # $1 label, $2 secret the router would send, rest: extra docker args
+    local label=$1 sent=$2; shift 2
+    docker rm -f "$NAME" >/dev/null
+    if ! start "$@"; then fail "$label: container started"; return; fi
+    local code; code=$(admin_code "$sent"); local public; public=$(public_code)
+    local logs; logs=$(docker logs "$NAME" 2>&1)
+    check "$label: startup ERROR names MPASS_EDGE_SECRET" 'grep -q "ERROR: MPASS_EDGE_SECRET" <<<"$logs"'
+    check "$label: admin UI 403" '[ "$code" = 403 ]'
+    check "$label: per-request ERROR on stderr" 'grep -q "mPass SSO is off" <<<"$logs"'
+    check "$label: the secret value is never logged" '[ -z "$sent" ] || ! grep -qF "$sent" <<<"$logs"'
+    check "$label: public /mtc.js still 200" '[ "$public" = 200 ]'
+}
+starts_failing_closed "unset secret" "" "${base_sso[@]}"
+starts_failing_closed "short secret" "short-secret" "${base_sso[@]}" -e MPASS_EDGE_SECRET=short-secret
+placeholder=CHANGE_ME_MAUTIC_EDGE_SECRET_0123456789abcdef
+starts_failing_closed "CHANGE_ME_ secret" "$placeholder" "${base_sso[@]}" -e MPASS_EDGE_SECRET=$placeholder
+
+docker rm -f "$NAME" >/dev/null
+start "${base_sso[@]}" -e MPASS_EDGE_SECRET=$SECRET -e SMB_CORPORATE_ID=acme-42 || fail "corporate binding without a verifier: container started"
+code=$(admin_code "$SECRET"); public=$(public_code); logs=$(docker logs "$NAME" 2>&1)
+check "corporate binding without a verifier: startup ERROR names the missing settings" 'grep -q "ERROR: SMB_CORPORATE_ID is set but no token issuer or client id" <<<"$logs"'
+check "corporate binding without a verifier: admin login refused (403)" '[ "$code" = 403 ]'
+check "corporate binding without a verifier: public /mtc.js still 200" '[ "$public" = 200 ]'
+
+secret_dir=$(mktemp -d); printf '%s\n' "$SECRET" > "$secret_dir/edge-secret"; chmod 0644 "$secret_dir/edge-secret"
+docker rm -f "$NAME" >/dev/null
+start "${base_sso[@]}" -e MPASS_EDGE_SECRET_FILE=/run/secrets/mautic-edge -v "$secret_dir/edge-secret:/run/secrets/mautic-edge:ro" || fail "file-mounted secret: container started"
+logs=$(docker logs "$NAME" 2>&1)
+check "file-mounted secret: no false ERROR" '! grep -q "ERROR: MPASS_EDGE_SECRET" <<<"$logs"'
+check "file-mounted secret: the admin UI is served" '[ "$(admin_code "$SECRET")" = 200 ]'
+rm -rf "$secret_dir"
 
 echo "== 5.23: restart without AUTH_TYPE (prod container compiled without the flag)"
 docker rm -f "$NAME" >/dev/null   # config/ (local.php) survives in the volume: no reinstall

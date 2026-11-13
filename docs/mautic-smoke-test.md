@@ -64,7 +64,7 @@ curl -s -o /dev/null -w "%{http_code}\n" $H -H "Authorization: Bearer $T" http:/
 | 19 | Set `DEFAULT_EMAIL_DOMAIN` to empty (`DEFAULT_EMAIL_DOMAIN=` in the devkit's `.env`; the devkit sends a bare mPass id) | Login refused with the mPass refusal page (`unresolvable`); no user created |
 | 20 | Set `SMB_CORPORATE_ID` to a value your account doesn't have (on the app only) | `403` refusal page (`corporate`), no user created; an open session is flushed |
 | 21 | Unset both `SMB_CORPORATE_ID` and `MPASS_ALLOW_ANY_TENANT` | The container refuses to start and names both variables |
-| 22 | Set `MPASS_EDGE_SECRET=short` | The container refuses to start |
+| 22 | Set `MPASS_EDGE_SECRET=short` (or unset it, or a `CHANGE_ME_` value) | The container starts with an `ERROR` naming `MPASS_EDGE_SECRET`; `/s/dashboard` is `403` for everyone with an error in the Mautic log; a landing page, `/mtc.js` and the internal API still work |
 | 23 | Set `LOGOUT_REDIRECT_URL=not-a-url`, then Logout | A static page, no redirect; an error in the Mautic log |
 
 Put every setting back afterwards.
