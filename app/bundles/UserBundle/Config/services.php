@@ -66,6 +66,26 @@ return function (ContainerConfigurator $configurator): void {
             '$edgeSecret'         => '%env(default::MPASS_EDGE_SECRET)%',
             '$edgeSecretFile'     => '%env(default::MPASS_EDGE_SECRET_FILE)%',
             '$allowAnyTenant'     => '%env(default::MPASS_ALLOW_ANY_TENANT)%',
+            '$tokenVerifier'      => service(Mautic\UserBundle\Security\Mpass\MpassTokenVerifier::class),
+        ]);
+    $services->set(Mautic\UserBundle\Security\Mpass\MpassJwks::class)
+        ->args([
+            '$httpClient' => service(Symfony\Contracts\HttpClient\HttpClientInterface::class),
+            '$cache'      => service('cache.app'),
+        ]);
+    $services->set(Mautic\UserBundle\Security\Mpass\MpassLogRedactor::class)->tag('monolog.processor');
+    $services->set(Mautic\UserBundle\Security\Mpass\MpassLogThrottle::class)
+        ->args([
+            '$logger' => service('monolog.logger.mautic'),
+            '$cache'  => service('cache.app'),
+        ]);
+    $services->set(Mautic\UserBundle\Security\Mpass\MpassTokenVerifier::class)
+        ->args([
+            '$cognitoIssuerUrl'  => '%env(default::MPASS_COGNITO_ISSUER_URL)%',
+            '$cognitoRegion'     => '%env(default::COGNITO_AWS_REGION)%',
+            '$cognitoUserPoolId' => '%env(default::COGNITO_USER_POOL_ID)%',
+            '$tokenIssuerUrl'    => '%env(default::MPASS_TOKEN_ISSUER_URL)%',
+            '$clientId'          => '%env(default::MPASS_OIDC_CLIENT_ID)%',
         ]);
     $services->set(Mautic\UserBundle\Security\Mpass\MpassOutboundGuard::class);
     $services->set(Mautic\UserBundle\Security\Authenticator\MpassProxyAuthenticator::class)

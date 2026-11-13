@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace Mautic\UserBundle\EventListener;
 
 use Mautic\UserBundle\Security\Authenticator\MpassProxyAuthenticator;
+use Mautic\UserBundle\Security\Mpass\MpassLogThrottle;
 use Mautic\UserBundle\Security\Mpass\ProxyIdentity;
 use Psr\Log\LoggerInterface;
+use Psr\Log\LogLevel;
 use Symfony\Component\EventDispatcher\EventSubscriberInterface;
 use Symfony\Component\HttpFoundation\RedirectResponse;
 use Symfony\Component\HttpFoundation\Request;
@@ -71,6 +73,7 @@ final readonly class MpassLocalAuthGuard implements EventSubscriberInterface
         private ?string $portalUrl,
         private SessionFactoryInterface $sessionFactory,
         private LoggerInterface $logger,
+        private MpassLogThrottle $logThrottle,
         private ?string $rememberMePath = '/',
         private ?string $rememberMeDomain = null,
     ) {
@@ -136,6 +139,8 @@ final readonly class MpassLocalAuthGuard implements EventSubscriberInterface
             $request->attributes->set(MpassProxyAuthenticator::EXPIRE_REMEMBER_ME, true);
         }
 
+        $this->warnOnUntrustedIdentity($request);
+
         $response = $this->responseFor($request, (string) $request->attributes->get('_route'));
         if (null !== $response) {
             $event->setResponse($response);
@@ -182,15 +187,12 @@ final readonly class MpassLocalAuthGuard implements EventSubscriberInterface
             return new Response('', Response::HTTP_UNAUTHORIZED);
         }
 
-        // Round-2 review R2-5, when an edge secret is configured: every request to the admin UI that
-        // came through the protected router carries it. One that does not came from inside the
-        // network and is refused outright. Without a configured secret fromEdge() is always true.
+        // Round-2 review R2-5: every request to the admin UI that came through the protected router
+        // carries the edge secret. One that does not came from inside the network and is refused
+        // outright, before its identity headers can log anyone in or end a session. Without a usable
+        // secret configured nothing comes from the edge, so mPass sign-in is off (fail closed).
         if (preg_match(self::MAIN_FIREWALL_PATH, $this->path($request)) && !$this->identity->fromEdge($request)) {
-            $this->logger->warning('mPass SSO: admin-UI request without a valid edge secret refused', [
-                'path'                => $this->path($request),
-                'client_ip'           => $request->getClientIp(),
-                'secret_header_given' => $request->headers->has(ProxyIdentity::EDGE_SECRET_HEADER), // never the value
-            ]);
+            $this->logUntrustedAdminRequest($request);
 
             return new Response('', Response::HTTP_FORBIDDEN);
         }
@@ -225,6 +227,50 @@ final readonly class MpassLocalAuthGuard implements EventSubscriberInterface
     private function path(Request $request): string
     {
         return rawurldecode($request->getPathInfo());
+    }
+
+    /**
+     * Identity headers without the edge secret came from inside the network, not through mPass:
+     * ProxyIdentity never reads them, and this says so. The admin UI refuses such a request and
+     * logs it in logUntrustedAdminRequest(). The mPass id, never the email or a secret.
+     */
+    private function warnOnUntrustedIdentity(Request $request): void
+    {
+        if (ProxyIdentity::carriesIdentity($request)
+            && !preg_match(self::MAIN_FIREWALL_PATH, $this->path($request))
+            && !$this->identity->fromEdge($request)) {
+            $this->logThrottle->log(LogLevel::WARNING, 'mPass identity headers ignored: request lacks the edge secret', $this->logContext($request), $this->remoteAddr($request));
+        }
+    }
+
+    /**
+     * Error when no usable edge secret is configured: then every admin request lands here and
+     * nobody can sign in, which is a deployment fault.
+     */
+    private function logUntrustedAdminRequest(Request $request): void
+    {
+        $this->identity->hasUsableEdgeSecret()
+            ? $this->logThrottle->log(LogLevel::WARNING, 'mPass SSO: admin-UI request without a valid edge secret refused', $this->logContext($request), $this->remoteAddr($request))
+            : $this->logThrottle->log(LogLevel::ERROR, 'mPass SSO is off: MPASS_EDGE_SECRET is unset, a CHANGE_ME_ placeholder or shorter than 32 characters; admin-UI request refused', $this->logContext($request), $this->remoteAddr($request));
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function logContext(Request $request): array
+    {
+        return [
+            'mpass_id'            => ProxyIdentity::mpassIdForLogs($request),
+            'path'                => $this->path($request),
+            'remote_addr'         => $this->remoteAddr($request),
+            'secret_header_given' => $request->headers->has(ProxyIdentity::EDGE_SECRET_HEADER),
+        ];
+    }
+
+    /** The socket peer, not X-Forwarded-For: an untrusted caller cannot vary it to dodge the throttle. */
+    private function remoteAddr(Request $request): string
+    {
+        return (string) $request->server->get('REMOTE_ADDR', '-');
     }
 
     private function mpassPage(string $reason): Response

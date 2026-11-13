@@ -37,6 +37,7 @@
     "doctrine/orm": "^2.14.0",
     "exercise/htmlpurifier-bundle": "^5.0",
     "ezyang/htmlpurifier": "^4.16",
+    "firebase/php-jwt": "^7.0",
     "friendsofsymfony/rest-bundle": "^3.8",
     "gaufrette/aws-s3-adapter": "^0.4.0",
     "gaufrette/extras": "^0.1.0",

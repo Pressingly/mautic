@@ -13,9 +13,11 @@ use Mautic\UserBundle\Entity\Role;
 use Mautic\UserBundle\Entity\RoleRepository;
 use Mautic\UserBundle\Entity\User;
 use Mautic\UserBundle\Model\UserModel;
+use Mautic\UserBundle\Security\Mpass\MpassLogThrottle;
 use Mautic\UserBundle\Security\Mpass\MpassRefusalException;
 use Mautic\UserBundle\Security\Mpass\ProxyIdentity;
 use Psr\Log\LoggerInterface;
+use Psr\Log\LogLevel;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\Security\Core\Authentication\Token\Storage\TokenStorageInterface;
@@ -35,7 +37,9 @@ use Twig\Environment;
  * Trust chain — any broken link turns X-Auth-Request-Email into an impersonation vector:
  *  1. the container publishes no port, so Traefik is the only way in;
  *  2. the mautic-secure router runs strip-auth-headers before mpass-auth;
- *  3. oauth2-proxy validates the session and re-injects the headers on every request.
+ *  3. oauth2-proxy validates the session and re-injects the headers on every request;
+ *  4. the headers count only next to the edge secret the mautic-secure router injects
+ *     (ProxyIdentity::fromEdge), and the forwarded token is verified under a corporate binding.
  *
  * Behaviour and rationale: doc/mpass_sso.md.
  */
@@ -56,6 +60,7 @@ final class MpassProxyAuthenticator extends AbstractAuthenticator implements Int
         private readonly RoleRepository $roleRepository,
         private readonly Environment $twig,
         private readonly LoggerInterface $logger,
+        private readonly MpassLogThrottle $logThrottle,
         private readonly ?string $defaultRole,
     ) {
     }
@@ -78,12 +83,38 @@ final class MpassProxyAuthenticator extends AbstractAuthenticator implements Int
             $resolved = $this->identity->resolve($asserted);
             if (null !== $resolved
                 && ProxyIdentity::normalise($user->getEmail()) === $resolved
-                && $this->identity->corporateOk($request)) {
+                && !$this->sessionLosesCorporateBinding($request)) {
                 return false; // Rule 1: match, and corporate binding still holds (continuous)
             }
         }
 
         return true;
+    }
+
+    /**
+     * The per-request re-check on an established session. Only a verified token naming another
+     * tenant (not_corporate, wrong_organization) ends it. Every other failure, transient or not
+     * (missing, expired, bad signature, untrusted issuer, wrong audience, JWKS down, verifier not
+     * configured), is logged and the session continues, so an issuer outage cannot sign everyone
+     * out; the same as the other bundle apps. mpass-auth-proxy enforces the corporate id at login
+     * and on every refresh, and a new session always needs a verified token.
+     */
+    private function sessionLosesCorporateBinding(Request $request): bool
+    {
+        $refusal = $this->identity->corporateRefusal($request);
+        if (null === $refusal || $refusal->endsEstablishedSession()) {
+            return null !== $refusal;
+        }
+
+        $mpassId = ProxyIdentity::mpassIdForLogs($request);
+        $this->logThrottle->log(LogLevel::WARNING, 'mPass corporate re-check skipped on an established session', [
+            'reason'   => $refusal->reason,
+            'detail'   => $refusal->detail,
+            'mpass_id' => $mpassId,
+            'path'     => $request->getPathInfo(),
+        ], $refusal->detail.' '.$mpassId);
+
+        return false;
     }
 
     public function authenticate(Request $request): SelfValidatingPassport
@@ -95,8 +126,9 @@ final class MpassProxyAuthenticator extends AbstractAuthenticator implements Int
         if (null === $email) {
             throw new MpassRefusalException(MpassRefusalException::UNRESOLVABLE);
         }
-        if (!$this->identity->corporateOk($request)) {
-            throw new MpassRefusalException(MpassRefusalException::CORPORATE);
+        $refusal = $this->identity->corporateRefusal($request);
+        if (null !== $refusal) {
+            throw $refusal;
         }
 
         $user = $this->findByEmail($email) ?? $this->provision($email);
@@ -118,7 +150,14 @@ final class MpassProxyAuthenticator extends AbstractAuthenticator implements Int
     public function onAuthenticationFailure(Request $request, AuthenticationException $exception): Response
     {
         $reason = $exception instanceof MpassRefusalException ? $exception->reason : 'error';
-        $this->logger->warning('mPass SSO refused a request', ['reason' => $reason, 'exception' => $exception]);
+        $this->logger->warning('mPass SSO refused a request', [
+            'reason'      => $reason,
+            'detail'      => $exception instanceof MpassRefusalException ? $exception->detail : '',
+            'mpass_id'    => ProxyIdentity::mpassIdForLogs($request),
+            'path'        => $request->getPathInfo(),
+            'remote_addr' => $request->server->get('REMOTE_ADDR', '-'),
+            'exception'   => $exception,
+        ]);
         $request->attributes->set(self::EXPIRE_REMEMBER_ME, true);
 
         // A 403 page, never a redirect to /s/login: that would loop (design.md §3).

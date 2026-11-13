@@ -175,6 +175,24 @@ final class MpassLocalAuthGuardTest extends AbstractMpassTestCase
         }
     }
 
+    /**
+     * FOSS-782: an unset edge secret turns mPass sign-in off, not the API. Internal callers (MCP
+     * servers, in-bundle tools) reach /api and /oauth on the backend network without the secret.
+     */
+    public function testApiAndOauthDoNotNeedTheEdgeSecret(): void
+    {
+        $this->restartWithEnv('MPASS_EDGE_SECRET', null);
+        $noSecret = ['HTTP_X_MPASS_EDGE_SECRET' => ''];
+
+        foreach ([
+            'API bearer' => $this->get('/api/contacts', null, $noSecret + ['HTTP_AUTHORIZATION' => 'Bearer x']),
+            'API basic'  => $this->get('/api/v2/docs.json', null, $noSecret + ['PHP_AUTH_USER' => 'admin', 'PHP_AUTH_PW' => 'Maut1cR0cks!']),
+            'token'      => $this->get('/oauth/v2/token', null, $noSecret, 'POST'),
+        ] as $label => $response) {
+            $this->assertFalse(in_array($response->getStatusCode(), [Response::HTTP_UNAUTHORIZED, Response::HTTP_FORBIDDEN, Response::HTTP_NOT_FOUND], true) && '' === $response->getContent(), "{$label} was refused by the SSO guard");
+        }
+    }
+
     public function testEncodedPathCannotSkipTheCredentialCheck(): void
     {
         $this->assertSame(Response::HTTP_UNAUTHORIZED, $this->get('/%73/account', null, ['HTTP_AUTHORIZATION' => 'Bearer x'])->getStatusCode());
